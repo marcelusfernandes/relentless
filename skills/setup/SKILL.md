@@ -21,7 +21,19 @@ Goal: the consumer repo works with Relentless end-to-end (labels, real CI, docs 
 5. **GitHub branch protection on main**: optional question, **off unless the user explicitly says yes**. Do not pass `--branch-protection` otherwise. Local git hooks are installed either way. When you ask, state plainly that on Codex without a sandbox the git-side hooks are advisory, since an agent can bypass them with `git push --no-verify` or `git -c core.hooksPath=/dev/null ...`, so branch protection is the only hard lock on `main` there. If they say yes, the apply command includes `--branch-protection` (fail-soft when the token cannot admin the repo). In the same breath, warn that private and organization repositories have GitHub Actions minute limits. When the quota or spending limit is exhausted, the harness runs the configured checks locally on the PR head and notes that on the PR; `merge:auto` may merge and `merge:human` still waits for a person. A self-hosted runner is how to keep real Actions CI. The agent does not merge on local checks when the mode is `merge:human`. If no test command is configured, the run stops at `human:pending`.
 6. Optional: **first product outcome** text → after apply, create milestone + epic
 
+## Upgrade (existing Relentless consumer)
+
+If the repo already has Relentless and you only need the new agent briefs / docs blocks:
+
+```bash
+"$RELENTLESS_ROOT/core/scripts/bootstrap.sh" --repo OWNER/NAME --workdir . \
+  --harness both --upgrade --apply
+```
+
+Keeps customized `checks` and `relentless-ci.yml`. Then commit on a branch and open a PR as usual.
+
 ## Plugin install (before or during)
+
 
 **Claude (project scope):**
 ```bash

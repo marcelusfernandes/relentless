@@ -46,7 +46,7 @@ Find the install path and export it:
 ```bash
 claude plugin list --json   # → installPath for relentless
 export RELENTLESS_ROOT="<installPath>"
-# example: ~/.claude/plugins/cache/relentless/relentless/1.4.4
+# example: ~/.claude/plugins/cache/relentless/relentless/1.4.9
 ```
 
 **Codex CLI** (user-level only — no project-scope flag on 0.165.x; each collaborator installs):
@@ -60,7 +60,7 @@ Cache path is **per version**. Pick the version directory and export it:
 
 ```bash
 ls ~/.codex/plugins/cache/relentless/relentless/
-export RELENTLESS_ROOT=~/.codex/plugins/cache/relentless/relentless/1.4.4   # use the version you installed
+export RELENTLESS_ROOT=~/.codex/plugins/cache/relentless/relentless/1.4.9   # use the version you installed
 ```
 
 Keep `RELENTLESS_ROOT` in your shell profile if you run scripts outside the agent.
@@ -97,6 +97,17 @@ gh auth refresh -s workflow
 ```
 
 What bootstrap seeds (CI, labels, hooks, issue forms, …): see [Prepare a consumer repo](#prepare-a-consumer-repo-required).
+
+### Upgrade an existing consumer (1.4.9+)
+
+Plain `--apply` still uses `seed_copy` (skips files that already exist). To refresh Relentless-owned files after a plugin bump without wiping your customizations:
+
+```bash
+"$RELENTLESS_ROOT"/core/scripts/bootstrap.sh --repo OWNER/NAME --workdir . \
+  --harness both --upgrade --apply
+```
+
+`--upgrade` refreshes Codex `.codex/agents/*.toml` and issue forms, upserts the Relentless docs blocks, and **preserves** existing `.relentless/config.json` `checks` plus an existing `.github/workflows/relentless-ci.yml` (so a Playwright e2e job you added is not dropped). It also seeds or appends a Codex marketplace pin in `.codex/config.toml` (`ref = "v1.4.9"`) when missing — Codex 0.165.x has no native per-project plugin lockfile; that pin is the supported workaround. Edit `ref=` when you bump, then reinstall/upgrade the marketplace.
 
 ### 4. First product request
 

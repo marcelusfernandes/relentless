@@ -2,7 +2,7 @@
 
 First-class Relentless practice. **Read `docs/decisions/` before planning or implementing.** Agents start here to navigate decisions.
 
-Append-only history: `docs/decisions/log.jsonl` (one JSON object per line). `## Decision` shows only the current decision; history lives in the log.
+Append-only history: `docs/decisions/log.jsonl` (one JSON object per line). `## Decision` shows only the current decision; history lives in the log. Orchestrator commits ADR rewrites and log lines on the **same branch where the decision was taken** and ships them with that PR (before review when the decision precedes review).
 
 Two layers:
 

@@ -10,6 +10,7 @@ HARNESS="both"
 INIT_EMPTY=1
 MERGE_DEFAULT_EXPLICIT=0
 BRANCH_PROTECTION=0
+UPGRADE=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
@@ -42,6 +43,12 @@ Usage: $(basename "$0") --repo OWNER/NAME [options]
                            Which agent harness this repo uses (default: both).
   --branch-protection      Opt in to GitHub branch protection on the default
                            branch. Off unless this flag is passed. Fail-soft.
+  --upgrade                Refresh Relentless-owned files that already exist
+                           (Codex agent TOMLs, issue forms, docs blocks).
+                           Preserves consumer-customized .checks and does not
+                           regenerate .github/workflows/relentless-ci.yml when
+                           that file already exists. First-time install still
+                           uses plain --apply (seed_copy skips existing files).
 
 Detects stack under --workdir, writes .github/workflows/relentless-ci.yml (real
 checks or FAIL-closed placeholder), upserts <!-- relentless:start --> blocks in
@@ -68,6 +75,7 @@ while [[ $# -gt 0 ]]; do
     --no-init-empty) INIT_EMPTY=0; shift ;;
     --harness) HARNESS="${2:-}"; shift 2 ;;
     --branch-protection) BRANCH_PROTECTION=1; shift ;;
+    --upgrade) UPGRADE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; usage; exit 2 ;;
   esac
@@ -91,7 +99,8 @@ case "$HARNESS" in
 esac
 
 MODE="DRY-RUN"; [[ "$APPLY" -eq 1 ]] && MODE="APPLY"
-echo "== Relentless bootstrap ($MODE) on $REPO (harness=$HARNESS) =="
+UPGRADE_LABEL=""; [[ "$UPGRADE" -eq 1 ]] && UPGRADE_LABEL=" upgrade"
+echo "== Relentless bootstrap ($MODE$UPGRADE_LABEL) on $REPO (harness=$HARNESS) =="
 
 SCOPE_OK=0
 if check_gh_workflow_scope; then SCOPE_OK=1
@@ -189,11 +198,14 @@ write_or_patch_config() {
   local merge="${MERGE_DEFAULT:-}"
   local tmp
   tmp="$(mktemp)"
+  # On --upgrade, keep consumer-customized checks (F47). Fresh installs still
+  # get detected stack checks. Missing checks keys are filled either way.
   jq --arg name "$name" --arg gh "$login" --arg merge "$merge" \
     --arg stack "$STACK" --arg pm "$PM" \
     --arg install "$INSTALL" --arg lint "$LINT" --arg typecheck "$TYPECHECK" \
     --arg test "$TEST" --arg build "$BUILD" \
     --argjson bp "${BRANCH_PROTECTION:-0}" \
+    --argjson upgrade "${UPGRADE:-0}" \
     '
     if ($name | length) > 0 then .decider.name = $name else . end |
     if ($gh | length) > 0 then .decider.github = $gh | .workers.default.github = $gh else . end |
@@ -201,15 +213,30 @@ write_or_patch_config() {
     if $bp == 1 then .rulesets = ((.rulesets // {}) + {apply: true}) else . end |
     .stack = $stack |
     .package_manager = (if $pm | length > 0 then $pm else null end) |
-    .checks = {
-      install: $install,
-      lint: $lint,
-      typecheck: $typecheck,
-      test: $test,
-      build: $build
-    }
+    (if $upgrade == 1 and (.checks | type == "object") then
+      .checks = (
+        .checks
+        | .install = (if (.install // "") == "" then $install else .install end)
+        | .lint = (if (.lint // "") == "" then $lint else .lint end)
+        | .typecheck = (if (.typecheck // "") == "" then $typecheck else .typecheck end)
+        | .test = (if (.test // "") == "" then $test else .test end)
+        | .build = (if (.build // "") == "" then $build else .build end)
+      )
+    else
+      .checks = {
+        install: $install,
+        lint: $lint,
+        typecheck: $typecheck,
+        test: $test,
+        build: $build
+      }
+    end)
     ' "$dest" >"$tmp" && mv "$tmp" "$dest"
-  echo "config written: $dest (merge.default=$(jq -r .merge.default "$dest"), stack=$(jq -r .stack "$dest"), decider=$(jq -r .decider.name "$dest"))"
+  if [[ "${UPGRADE:-0}" -eq 1 ]]; then
+    echo "config written: $dest (upgrade: preserved existing checks; merge.default=$(jq -r .merge.default "$dest"), stack=$(jq -r .stack "$dest"), decider=$(jq -r .decider.name "$dest"))"
+  else
+    echo "config written: $dest (merge.default=$(jq -r .merge.default "$dest"), stack=$(jq -r .stack "$dest"), decider=$(jq -r .decider.name "$dest"))"
+  fi
 }
 
 if [[ -n "$CONFIG" && -f "$CONFIG" ]]; then
@@ -325,18 +352,76 @@ if [[ "$SEED_FILES" -eq 1 ]]; then
   if [[ "$HARNESS" == "codex" || "$HARNESS" == "both" ]]; then
     for agent in planner implementer qa reviewer orchestrator documenter; do
       src="${SCRIPT_DIR}/../../.codex/agents/${agent}.toml"
-      [[ -f "$src" ]] && seed_copy "$src" ".codex/agents/${agent}.toml"
+      if [[ ! -f "$src" ]]; then
+        continue
+      fi
+      # F46: --upgrade refreshes owned agent briefs; first install keeps seed_copy.
+      if [[ "$UPGRADE" -eq 1 ]]; then
+        seed_write "$src" ".codex/agents/${agent}.toml"
+      else
+        seed_copy "$src" ".codex/agents/${agent}.toml"
+      fi
     done
+    # F48: pin marketplace ref in project .codex/config.toml when missing (Codex has no lockfile).
+    if [[ -n "$WORKDIR" ]]; then
+      codex_cfg="${WORKDIR}/.codex/config.toml"
+      pin_ver="$(jq -r .version "${SCRIPT_DIR}/../../plugin.json" 2>/dev/null || echo "")"
+      if [[ -n "$pin_ver" ]]; then
+        if [[ ! -f "$codex_cfg" ]]; then
+          echo "seed write: .codex/config.toml (marketplace pin ref=v${pin_ver})"
+          if [[ "$APPLY" -eq 1 ]]; then
+            mkdir -p "$(dirname "$codex_cfg")"
+            cat > "$codex_cfg" <<EOF
+# Relentless Codex pin (no native per-project plugin lockfile on 0.165.x).
+# After bumping the plugin, re-run bootstrap --upgrade or edit ref= below.
+[marketplaces.relentless]
+source_type = "git"
+source = "https://github.com/marcelusfernandes/relentless"
+ref = "v${pin_ver}"
+
+[plugins."relentless@relentless"]
+enabled = true
+EOF
+          fi
+        elif [[ "$UPGRADE" -eq 1 ]]; then
+          if grep -q '^\[marketplaces\.relentless\]' "$codex_cfg" 2>/dev/null; then
+            echo "seed skip (exists): .codex/config.toml marketplace pin — edit ref= manually or replace the file"
+          else
+            echo "seed append: .codex/config.toml marketplace pin ref=v${pin_ver}"
+            if [[ "$APPLY" -eq 1 ]]; then
+              cat >> "$codex_cfg" <<EOF
+
+# Relentless Codex pin (added by bootstrap --upgrade)
+[marketplaces.relentless]
+source_type = "git"
+source = "https://github.com/marcelusfernandes/relentless"
+ref = "v${pin_ver}"
+
+[plugins."relentless@relentless"]
+enabled = true
+EOF
+            fi
+          fi
+        else
+          echo "seed skip (exists): .codex/config.toml"
+        fi
+      fi
+    fi
   else
     echo "seed skip (--harness claude): .codex/agents/*.toml"
   fi
 
-  # CI — always relentless-ci.yml alongside existing workflows
+  # CI — first install writes relentless-ci.yml; --upgrade keeps an existing file (F47).
   if [[ "$SCOPE_OK" -eq 1 ]]; then
     if [[ -n "$WORKDIR" ]]; then
-      echo "seed write: .github/workflows/relentless-ci.yml (stack=${STACK} has_test=${HAS_TEST})"
-      if [[ "$APPLY" -eq 1 ]]; then
-        render_relentless_ci_to_file "${WORKDIR}/.github/workflows/relentless-ci.yml"
+      ci_dest="${WORKDIR}/.github/workflows/relentless-ci.yml"
+      if [[ "$UPGRADE" -eq 1 && -f "$ci_dest" ]]; then
+        echo "seed skip (upgrade preserves CI): .github/workflows/relentless-ci.yml"
+      else
+        echo "seed write: .github/workflows/relentless-ci.yml (stack=${STACK} has_test=${HAS_TEST})"
+        if [[ "$APPLY" -eq 1 ]]; then
+          render_relentless_ci_to_file "$ci_dest"
+        fi
       fi
     else
       echo "seed (needs --workdir): .github/workflows/relentless-ci.yml"
@@ -446,3 +531,4 @@ echo "tip: Claude — install at PROJECT scope:"
 echo "     claude plugin marketplace add marcelusfernandes/relentless"
 echo "     claude plugin install relentless@relentless --scope project -y"
 echo "tip: Codex (0.165.x) user-level only: codex plugin add relentless@relentless"
+echo "tip: upgrading an existing consumer: re-run with --upgrade --apply (refreshes owned files, keeps checks + CI)."

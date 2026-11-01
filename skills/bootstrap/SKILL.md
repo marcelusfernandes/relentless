@@ -23,3 +23,15 @@ core/scripts/bootstrap.sh --repo OWNER/NAME --workdir PATH \
 - Records `checks` + `stack` in `.relentless/config.json`
 - Never vendors plugin agents/skills
 - Installs `.relentless/githooks` (or chains an existing hooksPath / husky). Does **not** enable GitHub branch protection unless `--branch-protection` is passed.
+
+## Upgrade (v1.4.9+)
+
+```bash
+core/scripts/bootstrap.sh --repo OWNER/NAME --workdir PATH \
+  --harness both --upgrade          # dry-run
+core/scripts/bootstrap.sh --repo OWNER/NAME --workdir PATH \
+  --harness both --upgrade --apply
+```
+
+Refreshes Relentless-owned Codex agent TOMLs and issue forms; preserves consumer `checks` and an existing `relentless-ci.yml`. Seeds `.codex/config.toml` marketplace pin when missing.
+

@@ -15,3 +15,11 @@ core/scripts/bootstrap.sh --repo $1 --workdir ${2:-.} \
 core/scripts/bootstrap.sh --repo $1 --workdir ${2:-.} \
   --merge-default human --decider Marcelus --harness both --apply
 ```
+
+Upgrade an existing consumer (preserves checks + CI):
+
+```bash
+core/scripts/bootstrap.sh --repo $1 --workdir ${2:-.} --harness both --upgrade
+core/scripts/bootstrap.sh --repo $1 --workdir ${2:-.} --harness both --upgrade --apply
+```
+
