@@ -105,7 +105,10 @@ echo "== Relentless bootstrap ($MODE$UPGRADE_LABEL) on $REPO (harness=$HARNESS) 
 SCOPE_OK=0
 if check_gh_workflow_scope; then SCOPE_OK=1
 else
-  if [[ "$APPLY" -eq 1 && "$SEED_FILES" -eq 1 ]]; then
+  # --upgrade refreshes owned files and preserves existing CI; it does not need
+  # to push new workflow YAML. Allow apply so consumers can upgrade without the
+  # workflow OAuth scope (GHA tokens often lack it).
+  if [[ "$APPLY" -eq 1 && "$SEED_FILES" -eq 1 && "$UPGRADE" -eq 0 ]]; then
     echo "error: refusing --apply with seed files while 'workflow' scope is missing." >&2
     exit 1
   fi
@@ -412,16 +415,14 @@ EOF
   fi
 
   # CI — first install writes relentless-ci.yml; --upgrade keeps an existing file (F47).
-  if [[ "$SCOPE_OK" -eq 1 ]]; then
+  # Preserve path runs even without workflow scope so dry-run/upgrade messaging stays honest.
+  if [[ -n "$WORKDIR" && "$UPGRADE" -eq 1 && -f "${WORKDIR}/.github/workflows/relentless-ci.yml" ]]; then
+    echo "seed skip (upgrade preserves CI): .github/workflows/relentless-ci.yml"
+  elif [[ "$SCOPE_OK" -eq 1 ]]; then
     if [[ -n "$WORKDIR" ]]; then
-      ci_dest="${WORKDIR}/.github/workflows/relentless-ci.yml"
-      if [[ "$UPGRADE" -eq 1 && -f "$ci_dest" ]]; then
-        echo "seed skip (upgrade preserves CI): .github/workflows/relentless-ci.yml"
-      else
-        echo "seed write: .github/workflows/relentless-ci.yml (stack=${STACK} has_test=${HAS_TEST})"
-        if [[ "$APPLY" -eq 1 ]]; then
-          render_relentless_ci_to_file "$ci_dest"
-        fi
+      echo "seed write: .github/workflows/relentless-ci.yml (stack=${STACK} has_test=${HAS_TEST})"
+      if [[ "$APPLY" -eq 1 ]]; then
+        render_relentless_ci_to_file "${WORKDIR}/.github/workflows/relentless-ci.yml"
       fi
     else
       echo "seed (needs --workdir): .github/workflows/relentless-ci.yml"

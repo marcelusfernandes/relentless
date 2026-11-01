@@ -70,9 +70,15 @@ out_apply="$(
 )"
 rc_apply=$?
 set -e
-# Allow non-zero if workflow scope missing; still check file outcomes when apply partially ran.
-printf '%s\n' "$out_apply" | grep -q 'preserved existing checks\|upgrade preserves CI\|seed write: .codex/agents/orchestrator.toml' \
-  && ok "apply upgrade ran seed path" || bad "apply upgrade output unexpected: $out_apply"
+if [[ $rc_apply -ne 0 ]]; then
+  bad "apply upgrade exit $rc_apply: $out_apply"
+else
+  ok "apply upgrade exits 0"
+fi
+printf '%s\n' "$out_apply" | grep -q 'upgrade preserves CI' \
+  && ok "apply mentions preserve CI" || bad "apply missing preserve CI note"
+printf '%s\n' "$out_apply" | grep -q 'seed write: .codex/agents/orchestrator.toml (owned)' \
+  && ok "apply refreshes orchestrator.toml" || bad "apply did not refresh orchestrator: $out_apply"
 
 # checks preserved
 test_cmd="$(jq -r '.checks.test' "$TMP/repo/.relentless/config.json")"
