@@ -60,6 +60,17 @@ exit 0
 EOF
 chmod +x "$TMP/bin/gh"
 
+# Codex files that belong to a layer. Nucleus agents (orchestrator, implementer,
+# planner) and .codex/config.toml are not a layer's seed.
+# review → reviewer.toml, qa → qa.toml, docs → documenter.toml.
+layer_codex_files() { # layer
+  case "$1" in
+    review) printf '%s\n' .codex/agents/reviewer.toml ;;
+    qa) printf '%s\n' .codex/agents/qa.toml ;;
+    docs) printf '%s\n' .codex/agents/documenter.toml ;;
+  esac
+}
+
 # Briefs the nucleus always loads. Layer files are not part of this text when
 # that layer is off (agents/layers/<name>.md is read only while the layer is on).
 brief_hits() { # phrase
@@ -90,7 +101,12 @@ assert_briefs_clean() { # layer phrase...
 }
 
 core_still_runs() { # layer
-  local layer="$1" out rc log
+  local layer="$1" out rc log got
+  got="$(PATH="$TMP/corebin:$PATH" command -v gh 2>/dev/null || true)"
+  if [[ "$got" != "$TMP/corebin/gh" ]]; then
+    bad "M3 ${layer}: gh on PATH is '${got:-missing}', not stub $TMP/corebin/gh; refusing to call gh"
+    return
+  fi
   : >"$TMP/gh-core.log"
   out="$(PATH="$TMP/corebin:$PATH" GH_LOG="$TMP/gh-core.log" \
     bash "$ROOT/core/scripts/create-issue.sh" --repo acme/consumer --title t --body-file "$TMP/body" 2>&1)"
@@ -131,14 +147,57 @@ fresh_repo() { # dir branch
   printf '%s\n' 'name: Consumer bug' >"$repo/.github/ISSUE_TEMPLATE/bug.yml"
 }
 
-run_boot() { # repo  (stdout+stderr in $TMP/boot.out, trace in $TMP/boot.trace, rc in BOOT_RC)
-  local repo="$1"
+# bash -x writes the trace to stderr. bash 3.2 has no BASH_XTRACEFD, so the
+# trace file is the only copy of bootstrap's stderr.
+boot_err() {
+  tail -n 12 "$TMP/boot.trace" 2>/dev/null | tr '\n' ' '
+}
+
+run_boot() { # repo  (stdout in $TMP/boot.out, stderr+trace in $TMP/boot.trace, rc in BOOT_RC)
+  local repo="$1" got
   : >"$TMP/gh.log"
-  bash -x "$BOOT" --repo acme/consumer --workdir "$repo" \
-    --merge-default human --decider Ada --decider-github ada \
-    --harness claude --no-init-empty --apply \
-    >"$TMP/boot.out" 2>"$TMP/boot.trace"
+  : >"$TMP/boot.out"
+  : >"$TMP/boot.trace"
+  got="$(PATH="$TMP/bin:$PATH" command -v gh 2>/dev/null || true)"
+  if [[ "$got" != "$TMP/bin/gh" ]]; then
+    printf '%s\n' "guard: gh on PATH is '${got:-missing}', not ${TMP}/bin/gh" >"$TMP/boot.trace"
+    BOOT_RC=99
+    return 0
+  fi
+  PATH="$TMP/bin:$PATH" GH_LOG="$TMP/gh.log" \
+    bash -x "$BOOT" --repo acme/consumer --workdir "$repo" \
+      --merge-default human --decider Ada --decider-github ada \
+      --harness both --no-init-empty --apply \
+      >"$TMP/boot.out" 2>"$TMP/boot.trace"
   BOOT_RC=$?
+}
+
+assert_layer_codex_absent() { # repo layer
+  local repo="$1" layer="$2" path hit=""
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    if [[ -e "$repo/$path" ]]; then
+      hit="${hit} ${path}"
+    fi
+  done <<LIST
+$(layer_codex_files "$layer")
+LIST
+  if [[ -n "$hit" ]]; then
+    bad "M3 ${layer}: bootstrap seeded layer files under .codex while layers.${layer} is false:${hit}"
+  else
+    ok
+  fi
+}
+
+# Returns 1 when bootstrap itself failed. The caller skips layer file checks.
+boot_layer() { # repo layer
+  run_boot "$1"
+  if [[ "$BOOT_RC" -ne 0 ]]; then
+    bad "M3 $2: bootstrap exited $BOOT_RC before the layer check: $(boot_err)"
+    return 1
+  fi
+  assert_layer_codex_absent "$1" "$2"
+  return 0
 }
 
 # --- merge: no hook. Scripts and sentences must be absent. ---
@@ -148,6 +207,7 @@ layer_merge() {
   write_config "$repo" merge
   core_still_runs merge
   ok
+  boot_layer "$repo" merge
   assert_briefs_clean merge \
     'merge-if-ready' 'wait-ci' 'pin approval to SHA' 'merge:auto' 'CI red log' 'exits non-zero'
 }
@@ -158,6 +218,7 @@ layer_review() {
   fresh_repo "$repo" develop
   write_config "$repo" review
   core_still_runs review
+  boot_layer "$repo" review
   payload="$(jq -n --arg c 'core/scripts/apply-review-verdict.sh --pr 3 --verdict approved' '{tool_input:{command:$c}}')"
   rc="$(cd "$repo" && printf '%s' "$payload" | env RELENTLESS_ROLE=implementer \
     bash "$ROOT/hooks/scripts/pretool-reviewer-isolation.sh" >/dev/null 2>&1; echo $?)"
@@ -176,6 +237,7 @@ layer_qa() {
   write_config "$repo" qa
   core_still_runs qa
   ok
+  boot_layer "$repo" qa
   assert_briefs_clean qa 'fill-qa-section' 'Spawn qa'
 }
 
@@ -186,6 +248,7 @@ layer_worktrees() {
   git -C "$repo" -c user.email=t@example.com -c user.name=Test commit -q --allow-empty -m init
   write_config "$repo" worktrees
   core_still_runs worktrees
+  boot_layer "$repo" worktrees
   payload="$(jq -n --arg cwd "$repo" --arg f "$TMP/outside.txt" '{cwd:$cwd, tool_input:{file_path:$f}}')"
   rc="$(cd "$repo" && printf '%s' "$payload" | env RELENTLESS_ROLE=implementer \
     bash "$ROOT/hooks/scripts/pretool-protect-worktree-write.sh" >/dev/null 2>&1; echo $?)"
@@ -203,16 +266,15 @@ layer_decisions() {
   fresh_repo "$repo" develop
   write_config "$repo" decisions
   core_still_runs decisions
-  run_boot "$repo"
-  if [[ "$BOOT_RC" -ne 0 ]]; then
-    bad "M3 decisions: bootstrap exited $BOOT_RC before the layer check: $(tail -n 5 "$TMP/boot.out")"
-  elif [[ -e "$repo/docs/decisions/README.md" || -e "$repo/docs/decisions/log.jsonl" || -e "$repo/docs/decisions/adr/TEMPLATE.md" ]]; then
+  if boot_layer "$repo" decisions; then
+  if [[ -e "$repo/docs/decisions/README.md" || -e "$repo/docs/decisions/log.jsonl" || -e "$repo/docs/decisions/adr/TEMPLATE.md" ]]; then
     [[ -e "$repo/docs/decisions/README.md" ]] && seeded="${seeded} docs/decisions/README.md"
     [[ -e "$repo/docs/decisions/log.jsonl" ]] && seeded="${seeded} docs/decisions/log.jsonl"
     [[ -e "$repo/docs/decisions/adr/TEMPLATE.md" ]] && seeded="${seeded} docs/decisions/adr/TEMPLATE.md"
     bad "M3 decisions: new-adr templates were seeded while layers.decisions is false:${seeded}"
   else
     ok
+  fi
   fi
   assert_briefs_clean decisions 'new-adr' 'log.jsonl' '## Decision'
 }
@@ -224,10 +286,7 @@ layer_templates() {
   write_config "$repo" templates
   core_still_runs templates
   ok
-  run_boot "$repo"
-  if [[ "$BOOT_RC" -ne 0 ]]; then
-    bad "M3 templates: bootstrap exited $BOOT_RC before the layer check: $(tail -n 5 "$TMP/boot.out")"
-  else
+  if boot_layer "$repo" templates; then
     [[ -e "$repo/.github/ISSUE_TEMPLATE/investigation.yml" ]] && seeded="${seeded} investigation.yml"
     [[ -e "$repo/.github/ISSUE_TEMPLATE/epic.yml" ]] && seeded="${seeded} epic.yml"
     [[ -e "$repo/.github/ISSUE_TEMPLATE/relentless.yml" ]] && seeded="${seeded} relentless.yml"
@@ -252,10 +311,8 @@ layer_ci() {
   write_config "$repo" ci
   core_still_runs ci
   ok
-  run_boot "$repo"
-  if [[ "$BOOT_RC" -ne 0 ]]; then
-    bad "M3 ci: bootstrap exited $BOOT_RC before the layer check: $(tail -n 5 "$TMP/boot.out")"
-  elif grep -E 'detect-stack\.sh|render-ci\.sh' "$TMP/boot.trace" >/dev/null; then
+  if boot_layer "$repo" ci; then
+  if grep -E 'detect-stack\.sh|render-ci\.sh' "$TMP/boot.trace" >/dev/null; then
     bad "M3 ci: detect-stack.sh or render-ci.sh ran while layers.ci is false: $(grep -E 'detect-stack\.sh|render-ci\.sh' "$TMP/boot.trace" | head -n 1)"
   else
     ok
@@ -264,6 +321,7 @@ layer_ci() {
     bad "M3 ci: render-ci wrote .github/workflows/relentless-ci.yml while layers.ci is false"
   else
     ok
+  fi
   fi
 }
 
@@ -274,13 +332,12 @@ layer_githooks() {
   git -C "$repo" -c user.email=t@example.com -c user.name=Test commit -q --allow-empty -m init
   write_config "$repo" githooks
   core_still_runs githooks
-  run_boot "$repo"
-  if [[ "$BOOT_RC" -ne 0 ]]; then
-    bad "M3 githooks: bootstrap exited $BOOT_RC before the layer check: $(tail -n 5 "$TMP/boot.out")"
-  elif [[ -e "$repo/.relentless/githooks/pre-commit" || -e "$repo/.relentless/githooks/pre-push" ]]; then
+  if boot_layer "$repo" githooks; then
+  if [[ -e "$repo/.relentless/githooks/pre-commit" || -e "$repo/.relentless/githooks/pre-push" ]]; then
     bad "M3 githooks: install-githooks.sh wrote .relentless/githooks while layers.githooks is false"
   else
     ok
+  fi
   fi
   rc="$(cd "$repo" && bash "$ROOT/core/templates/githooks/pre-commit" </dev/null >/dev/null 2>&1; echo $?)"
   if [[ "$rc" -eq 0 ]]; then
@@ -303,6 +360,7 @@ layer_docs() {
   write_config "$repo" docs
   core_still_runs docs
   ok
+  boot_layer "$repo" docs
   assert_briefs_clean docs 'write-status-snapshot' 'documenter'
 }
 

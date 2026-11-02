@@ -41,6 +41,17 @@ make_repo() { # dest
   "$REAL_GIT" -C "$dest" push -q -u origin develop
 }
 
+# command -v exits 1 when gh is absent; that miss is the guard, not a crash.
+require_stub_gh() {
+  local got
+  got="$(PATH="$TMP/bin:$PATH" command -v gh 2>/dev/null || true)"
+  if [[ "$got" != "$TMP/bin/gh" ]]; then
+    bad "M10: gh on PATH is '${got:-missing}', not stub $TMP/bin/gh; refusing to call gh"
+    return 1
+  fi
+  return 0
+}
+
 run_create() { # workdir parent
   local workdir="$1" parent="$2"
   PATH="$TMP/bin:$PATH" \
@@ -78,8 +89,13 @@ mkdir -p "$TMP/ok-parent"
 make_repo "$TMP/ok-repo" "$TMP/ok-origin.git"
 : >"$TMP/gh.log"
 : >"$TMP/git.log"
+if ! require_stub_gh; then
+  ok_rc=99
+  ok_out="stub guard failed"
+else
 ok_out="$(run_create "$TMP/ok-repo" "$TMP/ok-parent" 2>&1)"
 ok_rc=$?
+fi
 ok_gh="$(cat "$TMP/gh.log")"
 ok_git="$(cat "$TMP/git.log")"
 if [[ "$ok_rc" -eq 0 \
@@ -111,8 +127,14 @@ mkdir -p "$TMP/bad-parent"
 make_repo "$TMP/bad-repo" "$TMP/bad-origin.git"
 : >"$TMP/gh.log"
 : >"$TMP/git.log"
+if ! require_stub_gh; then
+  bad_rc=99
+  bad_out="stub guard failed"
+  bad_git=""
+else
 bad_out="$(run_create "$TMP/bad-repo" "$TMP/bad-parent" 2>&1)"
 bad_rc=$?
+fi
 bad_git="$(cat "$TMP/git.log")"
 if [[ "$bad_rc" -ne 0 ]]; then
   ok
@@ -148,8 +170,15 @@ mkdir -p "$TMP/help-parent"
 make_repo "$TMP/help-repo" "$TMP/help-origin.git"
 : >"$TMP/gh.log"
 : >"$TMP/git.log"
+if ! require_stub_gh; then
+  help_rc=99
+  help_out="stub guard failed"
+  help_gh=""
+  help_git=""
+else
 help_out="$(run_create "$TMP/help-repo" "$TMP/help-parent" 2>&1)"
 help_rc=$?
+fi
 help_gh="$(cat "$TMP/gh.log")"
 help_git="$(cat "$TMP/git.log")"
 # grep exits 1 when the create call was never made; that is the failure we assert below.

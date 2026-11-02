@@ -99,6 +99,22 @@ exit 0
 EOF
 chmod +x "$TMP/bin/gh"
 
+# Refuse to continue if PATH would reach a real gh. The stub must be the only gh.
+require_stub_gh() {
+  local got
+  # command -v exits 1 when gh is absent; that miss is the guard, not a crash.
+  got="$(PATH="$TMP/bin:$PATH" command -v gh 2>/dev/null || true)"
+  if [[ "$got" != "$TMP/bin/gh" ]]; then
+    bad "M1: gh on PATH is '${got:-missing}', not stub $TMP/bin/gh; refusing to call gh"
+    return 1
+  fi
+  return 0
+}
+if ! require_stub_gh; then
+  echo "pass=$PASS fail=$FAIL"
+  exit 1
+fi
+
 git -C "$REPO" init -q -b develop
 git -C "$REPO" add README.md AGENTS.md .gitignore package.json .github
 git -C "$REPO" -c user.email=t@example.com -c user.name=Test commit -q -m 'consumer baseline'

@@ -61,11 +61,26 @@ fi
 exit 0
 EOF
 chmod +x "$TMP/bin/gh"
+# command -v exits 1 when gh is absent; that miss is the guard, not a crash.
+require_stub_gh() {
+  local got
+  got="$(PATH="$TMP/bin:$PATH" command -v gh 2>/dev/null || true)"
+  if [[ "$got" != "$TMP/bin/gh" ]]; then
+    bad "M5: gh on PATH is '${got:-missing}', not stub $TMP/bin/gh; refusing to call gh"
+    return 1
+  fi
+  return 0
+}
 : >"$TMP/gh-wt.log"
+if ! require_stub_gh; then
+  wt_rc=99
+  wt_out="stub guard failed"
+else
 wt_out="$(PATH="$TMP/bin:$PATH" GH_LOG="$TMP/gh-wt.log" \
   bash "$ROOT/core/scripts/worktree-create.sh" --repo acme/consumer --issue 9 --slug login \
     --workdir "$TMP/wt" --dry-run 2>&1)"
 wt_rc=$?
+fi
 if [[ "$wt_rc" -ne 0 ]]; then
   bad "M5 worktree-create dry-run exited $wt_rc before the base check: $wt_out"
 elif printf '%s\n' "$wt_out" | grep -q 'origin/develop' && ! printf '%s\n' "$wt_out" | grep -q 'origin/main'; then
@@ -141,6 +156,11 @@ exit 0
 EOF
 chmod +x "$TMP/bin/gh"
 
+if ! require_stub_gh; then
+  merge_rc=99
+  merge_out="stub guard failed"
+  merge_call=""
+else
 jq -n '{
   decider: {name: "Ada", github: "ada"},
   workers: {default: {github: "ada"}},
@@ -156,6 +176,7 @@ merge_out="$(
 )"
 merge_rc=$?
 merge_call="$(cat "$TMP/gh-merge-call.log" 2>/dev/null || true)"
+fi
 if [[ -z "$merge_call" ]]; then
   bad "M5 merge-if-ready exited ${merge_rc} before choosing a merge method: $(printf '%s\n' "$merge_out" | tail -n 3 | tr '\n' ' ')"
 elif printf '%s\n' "$merge_call" | grep -q -- '--squash' && ! printf '%s\n' "$merge_call" | grep -E -q -- '--merge([^A-Za-z0-9_-]|$)'; then
@@ -172,10 +193,23 @@ printf '%s\n' 'name: consumer' 'on:' '  push:' '    branches: [develop]' '  pull
   >"$REPO/.github/workflows/consumer.yml"
 printf '%s\n' '{"scripts":{"test":"vitest","lint":"eslint","build":"vite build"}}' >"$REPO/package.json"
 printf '%s\n' 'name: Consumer bug' >"$REPO/.github/ISSUE_TEMPLATE/bug.yml"
+# Consumer-owned Codex briefs. --harness both must leave these alone.
+mkdir -p "$REPO/.codex/agents"
+for agent in planner implementer qa reviewer orchestrator documenter; do
+  printf '%s\n' "consumer ${agent} brief" >"$REPO/.codex/agents/${agent}.toml"
+done
 ci_before="$(cksum "$REPO/.github/workflows/consumer.yml" | awk '{print $1}')"
 git -C "$REPO" init -q -b develop
 git -C "$REPO" add .
 git -C "$REPO" -c user.email=t@example.com -c user.name=Test commit -q -m init
+codex_sums() {
+  local agent sum=""
+  for agent in planner implementer qa reviewer orchestrator documenter; do
+    sum="${sum} $(cksum "$REPO/.codex/agents/${agent}.toml" | awk '{print $1}')"
+  done
+  printf '%s' "$sum"
+}
+codex_before="$(codex_sums)"
 
 cat >"$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -206,11 +240,16 @@ exit 0
 EOF
 chmod +x "$TMP/bin/gh"
 : >"$TMP/gh-boot.log"
+if ! require_stub_gh; then
+  boot_rc=99
+  boot_out="stub guard failed"
+else
 boot_out="$(PATH="$TMP/bin:$PATH" GH_LOG="$TMP/gh-boot.log" \
   bash "$ROOT/core/scripts/bootstrap.sh" --repo acme/consumer --workdir "$REPO" \
     --merge-default human --decider Ada --decider-github ada \
-    --harness claude --no-init-empty --apply 2>&1)"
+    --harness both --no-init-empty --apply 2>&1)"
 boot_rc=$?
+fi
 if [[ "$boot_rc" -ne 0 ]]; then
   bad "M5 bootstrap exited $boot_rc before the checks assertion: $(printf '%s\n' "$boot_out" | tail -n 3 | tr '\n' ' ')"
 else
@@ -235,6 +274,11 @@ if [[ "$got_test" == "npm run test:consumer" ]]; then
   ok
 else
   bad "M5 checks: config checks.test is '${got_test:-<missing>}'; the repo CI runs 'npm run test:consumer'"
+fi
+if [[ "$(codex_sums)" == "$codex_before" ]]; then
+  ok
+else
+  bad "M5 bootstrap rewrote a consumer .codex/agents/*.toml"
 fi
 
 echo "pass=$PASS fail=$FAIL"
