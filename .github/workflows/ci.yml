@@ -33,29 +33,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          docker run --rm \
+          docker run --rm -i \
             -e GH_TOKEN \
             -e GITHUB_TOKEN \
             -v "$PWD:/work" \
             -w /work \
             bash:3.2 \
-            sh -ec '
-              # ruby loads the GitHub template YAML. github-cli is the gh the bootstrap suite calls.
-              # Do not add the bash package: that would replace this image's bash 3.2.
-              apk add --no-cache jq git python3 ruby github-cli
-              bash tests/hooks/test-hooks.sh
-              bash tests/hooks/test-decide-guard.sh
-              bash tests/hooks/test-githooks.sh
-              bash tests/scripts/test-wait-ci.sh
-              bash tests/scripts/test-review-verdict.sh
-              python3 tests/agents/test-codex-agent-briefs.py
-              bash tests/scripts/test-bootstrap-upgrade.sh
-              bash tests/scripts/test-portability.sh
-              bash tests/scripts/test-fill-qa-multiline.sh
-              bash tests/scripts/test-github-templates-yaml.sh
-              bash tests/scripts/test-merge-mode.sh
-              bash tests/scripts/test-bootstrap-additive.sh
-            '
+            sh -s <<'BASH32'
+          set -eu
+          # ruby loads the GitHub template YAML. github-cli is the gh the bootstrap suite calls.
+          # Do not add the bash package: that would replace the image bash 3.2.
+          apk add --no-cache jq git python3 ruby github-cli
+          git config --global --add safe.directory /work
+          bash tests/hooks/test-hooks.sh
+          bash tests/hooks/test-decide-guard.sh
+          bash tests/hooks/test-githooks.sh
+          bash tests/scripts/test-wait-ci.sh
+          bash tests/scripts/test-review-verdict.sh
+          python3 tests/agents/test-codex-agent-briefs.py
+          bash tests/scripts/test-bootstrap-upgrade.sh
+          bash tests/scripts/test-portability.sh
+          bash tests/scripts/test-fill-qa-multiline.sh
+          bash tests/scripts/test-github-templates-yaml.sh
+          bash tests/scripts/test-merge-mode.sh
+          bash tests/scripts/test-bootstrap-additive.sh
+          BASH32
 
   # Stock macOS bash and BSD tools. Release PRs only; macos-latest is billed apart from Linux.
   macos-release:
