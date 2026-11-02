@@ -41,6 +41,7 @@ jobs:
             bash:3.2 \
             sh -s <<'BASH32'
           set -eu
+          bash --version | grep -q 'version 3.2'
           # ruby loads the GitHub template YAML. github-cli is the gh the bootstrap suite calls.
           # Do not add the bash package: that would replace the image bash 3.2.
           apk add --no-cache jq git python3 ruby github-cli

@@ -6,7 +6,11 @@
 #
 # The verdict is the checks on the PR head SHA, by check name (for example
 # tests-ok). A newer green run of a different workflow on the same branch
-# does not cover a red check on that SHA.
+# does not cover a red check on that SHA. A green check list is not enough
+# on its own: jobs appear only after a workflow creates them, so the workflow
+# runs on that SHA are judged too. Green requires both. A run still queued,
+# pending, or in progress stays pending. failure, startup_failure, and
+# cancelled are red.
 #
 # One invocation polls until --timeout-sec (default 30), then returns:
 #   0  CI green
@@ -113,8 +117,9 @@ run_is_quota() {
 }
 
 # JSON array of the latest check per name: {name,status,conclusion,run_id}.
-# Check runs on the head SHA win. Workflow runs are the fallback when that
-# list is empty, and every run for the SHA is kept (not only the newest).
+# Workflow runs on the same SHA are judged as well once these look green.
+# When this list is empty, the workflow runs are the whole verdict, latest
+# per workflow, not only the newest run on the branch.
 latest_check_runs() {
   local sha="$1" raw="" out=""
   [[ -n "$sha" ]] || { printf '%s\n' '[]'; return 0; }
@@ -220,6 +225,31 @@ judge_checks() {
   printf 'green\t%s\tcompleted\n' "$rid"
 }
 
+# Workflow runs on the SHA, latest per workflow. Used when the check list
+# already looks green. Prints verdict<TAB>run_id<TAB>status.
+# failure / startup_failure / cancelled are red here: a startup_failure
+# creates no job, so the check list cannot see it.
+judge_workflow_runs() {
+  local json="$1" line=""
+  line="$(jq -r '
+    def bad: .status == "completed" and (
+      .conclusion == "failure" or .conclusion == "startup_failure" or .conclusion == "cancelled"
+      or .conclusion == "timed_out" or .conclusion == "action_required"
+    );
+    def waiting: .status == "pending" or .status == "in_progress" or .status == "queued"
+      or .status == "waiting" or .status == "requested";
+    if any(.[]; bad) then
+      first(.[] | select(bad)) | "failed\t\(.run_id)\tcompleted"
+    elif any(.[]; waiting) then
+      first(.[] | select(waiting)) | "pending\t\(.run_id)\t\(.status)"
+    else
+      "green\t\((.[0].run_id // ""))\tcompleted"
+    end
+  ' <<<"$json" 2>/dev/null || true)"  # intentional fail-soft: unreadable runs are not a green signal
+  [[ -n "$line" ]] || line=$'failed\t\tcompleted'
+  printf '%s\n' "$line"
+}
+
 while (( SECONDS < deadline )); do
   verdict="none"
   run_id=""
@@ -227,12 +257,16 @@ while (( SECONDS < deadline )); do
   checks="[]"
   runs="[]"
   parsed=""
+  checks_green=0
   if [[ -n "$SHA" ]]; then
     checks="$(latest_check_runs "$SHA")"
   fi
   [[ -n "$checks" ]] || checks="[]"
   if [[ "$(jq 'length' <<<"$checks")" -gt 0 ]]; then
     parsed="$(judge_checks "$checks")"
+    if [[ "${parsed%%$'\t'*}" == "green" ]]; then
+      checks_green=1
+    fi
   else
     runs="$(latest_workflow_runs "$SHA" "$BRANCH")"
     [[ -n "$runs" ]] || runs="[]"
@@ -245,6 +279,18 @@ while (( SECONDS < deadline )); do
     parsed="${parsed#*$'\t'}"
     run_id="${parsed%%$'\t'*}"
     status="${parsed#*$'\t'}"
+  fi
+  # Green checks can exist before another workflow has created its jobs.
+  if [[ "$checks_green" -eq 1 ]]; then
+    runs="$(latest_workflow_runs "$SHA" "$BRANCH")"
+    [[ -n "$runs" ]] || runs="[]"
+    if [[ "$(jq 'length' <<<"$runs")" -gt 0 ]]; then
+      parsed="$(judge_workflow_runs "$runs")"
+      verdict="${parsed%%$'\t'*}"
+      parsed="${parsed#*$'\t'}"
+      run_id="${parsed%%$'\t'*}"
+      status="${parsed#*$'\t'}"
+    fi
   fi
 
   case "$verdict" in

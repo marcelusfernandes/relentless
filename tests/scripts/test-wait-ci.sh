@@ -194,6 +194,31 @@ if [[ "$rc" -eq 0 && "$out" == *"CI green"* && ! -s "$TMP/err" ]]; then
 else
   bad "both checks green rc=$rc out=$out err=$(cat "$TMP/err")"
 fi
+
+# The only check run is a fast green workflow. CI has not created tests-ok yet.
+printf '%s\n' '[{"databaseId":12,"status":"in_progress","conclusion":null,"name":"CI","headSha":"abc1111","workflowName":"CI"}]' >"$GH_RUN_LIST"
+cat >"$GH_CHECK_RUNS" <<'EOF'
+{"check_runs":[
+  {"name":"other","status":"completed","conclusion":"success","started_at":"2026-11-02T00:00:02Z"}
+]}
+EOF
+out="$(run_wait 2>"$TMP/err")"
+rc=$?
+if [[ "$rc" -eq 3 && "$out" == *"CI: pending"* && "$out" == *"exit 3"* && "$out" == *"foreground"* && "$out" == *"run 12"* && "$out" == *"in_progress"* ]]; then
+  ok
+else
+  bad "green other check with CI still in progress rc=$rc out=$out err=$(cat "$TMP/err")"
+fi
+
+# startup_failure creates no job, so it is absent from the check list.
+printf '%s\n' '[{"databaseId":13,"status":"completed","conclusion":"startup_failure","name":"CI","headSha":"abc1111","workflowName":"CI"}]' >"$GH_RUN_LIST"
+out="$(run_wait 2>"$TMP/err")"
+rc=$?
+if [[ "$rc" -eq 1 && "$(cat "$TMP/err")" == *"CI failed"* && "$(cat "$TMP/err")" != *"CI unavailable (quota)"* ]]; then
+  ok
+else
+  bad "startup_failure beside a green check rc=$rc out=$out err=$(cat "$TMP/err")"
+fi
 rm -f "$GH_CHECK_RUNS"
 unset GH_CHECK_RUNS
 
