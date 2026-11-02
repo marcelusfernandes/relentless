@@ -234,6 +234,20 @@ if [[ "$rc" -eq 4 && "$(cat "$TMP/err")" == *"CI unavailable (quota)"* && "$(cat
 else
   bad "quota failure beside a green check rc=$rc out=$out err=$(cat "$TMP/err")"
 fi
+
+# A real test failure on a workflow run is red even when the other check is green.
+cat >"$GH_RUN_VIEW" <<'EOF'
+{"headSha":"abc1111","conclusion":"failure","jobs":[{"databaseId":5,"conclusion":"failure","status":"completed","steps":[{"name":"Run tests","conclusion":"failure","status":"completed"}]}]}
+EOF
+printf '%s\n' '[{"message":"Process completed with exit code 1"}]' >"$GH_API_BODY"
+printf '%s\n' '[{"databaseId":15,"status":"completed","conclusion":"failure","name":"CI","headSha":"abc1111","workflowName":"CI"}]' >"$GH_RUN_LIST"
+out="$(run_wait 2>"$TMP/err")"
+rc=$?
+if [[ "$rc" -eq 1 && "$(cat "$TMP/err")" == *"CI failed"* && "$(cat "$TMP/err")" != *"CI unavailable (quota)"* ]]; then
+  ok
+else
+  bad "real failure beside a green check rc=$rc out=$out err=$(cat "$TMP/err")"
+fi
 rm -f "$GH_CHECK_RUNS"
 unset GH_CHECK_RUNS
 
