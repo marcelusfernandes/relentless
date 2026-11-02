@@ -67,18 +67,20 @@ if [[ "$DRY" -eq 1 ]]; then
   exit 0
 fi
 
+# bash 3.2 does not leave the shell on a failing command inside this subshell
+# under set -e, so each step exits itself and the parent exits with that status.
 (
-  cd "$WORKDIR"
-  git fetch origin "$BASE"
+  cd "$WORKDIR" || exit 1
+  git fetch origin "$BASE" || exit $?
   if [[ -e "$PATH_OUT" ]]; then
     echo "error: path exists: $PATH_OUT — remove or pass --path" >&2
     exit 1
   fi
   # Link the branch to the issue. No other creation path: a failure stops here.
-  gh issue develop "$ISSUE" --repo "$REPO" --base "$BASE" --name "$BRANCH"
-  git fetch origin "$BRANCH"
-  git worktree add "$PATH_OUT" "$BRANCH"
-)
+  gh issue develop "$ISSUE" --repo "$REPO" --base "$BASE" --name "$BRANCH" || exit $?
+  git fetch origin "$BRANCH" || exit $?
+  git worktree add "$PATH_OUT" "$BRANCH" || exit $?
+) || exit $?
 
 # Verify not based on another feature branch tip accidentally
 (
