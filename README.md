@@ -107,7 +107,7 @@ Plain `--apply` still uses `seed_copy` (skips files that already exist). To refr
   --harness both --upgrade --apply
 ```
 
-`--upgrade` refreshes Codex `.codex/agents/*.toml` and upserts the Relentless docs blocks. It adds missing labels, config keys, and issue forms, and leaves existing ones alone (no label edits, no rewritten forms or `ISSUE_TEMPLATE/config.yml`). It does not overwrite `stack`, `package_manager`, `checks`, or `merge.default`. `relentless-ci.yml` is created only on the first bootstrap; an existing file is kept, and one you delete stays deleted. It also seeds or appends a Codex marketplace pin in `.codex/config.toml` (`ref = "v1.4.11"`) when missing — Codex 0.165.x has no native per-project plugin lockfile; that pin is the supported workaround. Edit `ref=` when you bump, then reinstall/upgrade the marketplace.
+`--upgrade` does not rewrite an existing config, label, template, workflow, or `.codex` file. It still adds a missing config, the docs block, and missing core labels.
 
 ### 4. First product request
 
@@ -163,14 +163,10 @@ Installing the plugin alone is not enough. Prefer **Getting started → Set up**
 
 | Piece | Behavior |
 |-------|----------|
-| **Stack detection** | Node (lockfile → npm/pnpm/yarn/bun + scripts), Python, Go, Rust; else `unknown` |
-| **CI** | Writes `.github/workflows/relentless-ci.yml` with detected commands. If unknown / no test → workflow **fails** with a clear message (never a silent pass). Leaves other workflows alone. |
-| **merge.default** | Forced to `human` when checks are weak, unless you pass `--merge-default auto` explicitly |
-| **Config** | `.relentless/config.json` includes `stack` + `checks.{install,lint,typecheck,test,build}` |
-| **AGENTS.md / CLAUDE.md** | Upserts a `<!-- relentless:start -->` … `<!-- relentless:end -->` block (idempotent; does not skip existing files) |
-| **Issue forms** | `relentless.yml`, `investigation.yml`, **`epic.yml`**, `config.yml` with `blank_issues_enabled: false` |
-| **Labels** | Idempotent create/edit |
-| **Git hooks** | `.relentless/githooks/pre-commit` and `pre-push`. Sets `core.hooksPath` to that directory, or chains an existing hooksPath / husky without replacing it. Refuses commits on `main`/`master`, pushes to `main`/`master`, and non-fast-forward (force) pushes. |
+| **Config** | Writes `.relentless/config.json` only when it is missing: `base`, the merge methods the repo allows, `checks.test` from the repo's own workflow, and `layers.*` all false. An existing config is not edited. |
+| **AGENTS.md / CLAUDE.md** | Upserts a `<!-- relentless:start -->` … `<!-- relentless:end -->` block. |
+| **Labels** | Creates missing core labels only (`state:*`, `human:pending`, `human:decided`, `epic`). Never edits an existing label. |
+| **Layers** | CI, issue templates, githooks, and decision files are written only when `layers.<name>` is already true. A fresh bootstrap leaves them off and does not touch an existing workflow, template, or `.codex` file. |
 | **Branch protection** | **Off** unless you pass `--branch-protection` after an explicit yes in setup. Fail-soft if the token cannot admin the repo. On Codex without a sandbox the git hooks are advisory (`git push --no-verify` or `git -c core.hooksPath=/dev/null ...`); branch protection is the only hard lock on `main` there. |
 | **Actions minutes** | Private and organization repositories have GitHub Actions minute limits. When the quota or spending limit is exhausted, `merge-if-ready` runs the configured checks locally on the PR head and notes the result on the PR. With `merge:auto`, if those checks pass and the head SHA is stable, it may merge without a human. `merge:human` still waits for a person. A self-hosted runner is how to keep real Actions CI. With no test command, the issue stops at `human:pending` and nothing is merged. |
 
@@ -233,4 +229,4 @@ MIT
 ## Decision records & worktrees
 
 - Durable choices live in `docs/decisions/` (ADR = human gate via `/decide`; notes = no gate). Agents read them before plan/implement.
-- Each implementer works in its own git worktree (`skills/worktree-segura`, `worktree-create.sh`) on `<type>/<n>-<slug>` from `origin/main`.
+- Each implementer works in its own git worktree (`skills/worktree-segura`, `worktree-create.sh`) on `<type>/<n>-<slug>` from the repo base branch (`base` in `.relentless/config.json`).

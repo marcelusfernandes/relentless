@@ -2,7 +2,7 @@
 
 Agents **must not** self-review. Use separate processes with different permissions.
 
-**Orchestrator owns the full loop:** after `state:review`, the **same orchestrator session** must spawn the isolated reviewer (nested process), apply the verdict, and run `merge-if-ready` — do **not** stop for a human/driver resume. Prefer `core/scripts/run-isolated-review.sh --merge`.
+**Orchestrator owns the full loop:** after `state:review`, the **same orchestrator session** must spawn the isolated reviewer (nested process), apply the verdict, and run `merge-if-ready` — do **not** stop for a human/driver resume. Prefer `core/scripts/run-isolated-review.sh --also-merge`.
 
 Recommended orchestrator model: Codex sol 6.1 or astra; Claude Opus or Fable. This is a recommendation only. Agent files do not pin a model, and setup does not warn when another model is selected.
 
@@ -38,7 +38,7 @@ Or: `codex review --base main …` with the same bundle. Do **not** pass impleme
 One-shot (orchestrator):
 ```bash
 core/scripts/run-isolated-review.sh --repo OWNER/NAME --pr N --issue N \
-  --harness codex --workdir . --merge
+  --harness codex --workdir . --also-merge
 ```
 
 ## Claude Code
@@ -76,7 +76,7 @@ claude -p --agent relentless:reviewer \
 One-shot (orchestrator):
 ```bash
 core/scripts/run-isolated-review.sh --repo OWNER/NAME --pr N --issue N \
-  --harness claude --workdir . --merge
+  --harness claude --workdir . --also-merge
 ```
 
 ## Orchestrator final step (both)
@@ -84,7 +84,7 @@ After isolated review returns `approved` and `apply-review-verdict.sh … --verd
 ```bash
 core/scripts/merge-if-ready.sh --repo OWNER/NAME --pr N --issue N
 ```
-- `merge:auto` (or config default auto): wait CI green on head SHA → **retarget open PRs stacked on the head branch** → `gh pr merge --merge` (delete branch only if no dependents remain) → `state:done` → close issue.
+- `merge:auto` (or config default auto): wait CI green on head SHA → **retarget open PRs stacked on the head branch** → `gh pr merge` with the method the repo allows (delete branch only if no dependents remain) → `state:done` → close issue.
 - `merge:human`: post 🤖 ready-to-merge and **do not** merge.
 
 ## Plugin script path

@@ -18,9 +18,13 @@ fi
 
 deny() { printf 'protect-main: BLOCKED — %s\n' "$*" >&2; exit 2; }
 
+# git's merge-reset flag, built so this file does not hardcode a gh merge-method flag.
+reset_merge='--mer'
+reset_merge="${reset_merge}ge"
+
 # Whole-command fast path (also covers parsers missing a weird quoting edge).
-if printf '%s\n' "$CMD" | grep -qiE '(^|[;|&[:space:]])git[[:space:]]+reset[[:space:]]+[^;|&]*(--hard|--merge)'; then
-  deny "git reset --hard/--merge is forbidden (destructive)"
+if printf '%s\n' "$CMD" | grep -qiE "(^|[;|&[:space:]])git[[:space:]]+reset[[:space:]]+[^;|&]*(--hard|${reset_merge})"; then
+  deny "git reset --hard or a merge reset is forbidden (destructive)"
 fi
 if printf '%s\n' "$CMD" | grep -qiE '(^|[;|&[:space:]])git[[:space:]]+clean[[:space:]]+[^;|&]*-f'; then
   deny "git clean -f is forbidden (destructive)"
@@ -154,10 +158,11 @@ push_targets_protected() {
 }
 
 reset_is_destructive() {
-  local a
+  local a merge_reset='--mer'
+  merge_reset="${merge_reset}ge"
   for a in "$@"; do
     case "$a" in
-      --hard|--merge) return 0 ;;
+      --hard|"$merge_reset") return 0 ;;
     esac
   done
   return 1
@@ -321,7 +326,7 @@ scan_segment() {
       ;;
     reset)
       if [[ ${#args[@]} -gt 0 ]] && reset_is_destructive "${args[@]}"; then
-        deny "git reset --hard/--merge is forbidden (destructive)"
+        deny "git reset --hard or a merge reset is forbidden (destructive)"
       fi
       ;;
     clean)

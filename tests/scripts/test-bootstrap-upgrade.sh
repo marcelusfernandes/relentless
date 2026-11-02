@@ -39,14 +39,40 @@ for a in planner qa reviewer documenter; do
   echo "# old $a" > "$TMP/repo/.codex/agents/${a}.toml"
 done
 
-# Dry-run upgrade should mention preserve CI and owned refresh (no network labels if repo fake — use a dry path)
-# bootstrap needs a real --repo for gh label list; use dry-run against this repo name but expect gh calls.
-# Isolate: exercise the seed functions by sourcing is hard. Instead run with a known public repo
-# and --no... Actually labels need gh. Use marcelusfernandes/relentless itself as --repo (read-only labels).
+# Stub gh. This test checks files on disk and must not call the real GitHub API.
+mkdir -p "$TMP/bin"
+cat >"$TMP/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "auth" ]]; then
+  echo "Token scopes: 'repo', 'workflow'"
+  exit 0
+fi
+if [[ "$1" == "repo" ]]; then
+  if [[ "$*" == *"isEmpty"* ]]; then
+    echo false
+    exit 0
+  fi
+  if [[ "$*" == *"defaultBranchRef"* ]]; then
+    echo main
+    exit 0
+  fi
+  exit 0
+fi
+if [[ "$1" == "label" ]]; then
+  exit 0
+fi
+if [[ "$1" == "api" ]]; then
+  echo ada
+  exit 0
+fi
+exit 0
+EOF
+chmod +x "$TMP/bin/gh"
 
 set +e
 out="$(
-  bash "$BOOT" --repo marcelusfernandes/relentless --workdir "$TMP/repo" \
+  PATH="$TMP/bin:$PATH" \
+  bash "$BOOT" --repo o/r --workdir "$TMP/repo" \
     --harness codex --upgrade --merge-default human --decider Ada --decider-github ada \
     --no-init-empty 2>&1
 )"
@@ -58,13 +84,18 @@ else
   ok "dry-run upgrade exits 0"
 fi
 
-printf '%s\n' "$out" | grep -q 'upgrade preserves CI' && ok "dry-run mentions preserve CI" || bad "dry-run missing preserve CI note"
-printf '%s\n' "$out" | grep -q 'seed write: .codex/agents/orchestrator.toml (owned)' && ok "dry-run refreshes orchestrator.toml" || bad "dry-run did not plan owned orchestrator refresh: $(printf '%s\n' "$out" | grep -F '.codex/agents' || true)"
+printf '%s\n' "$out" | grep -q 'kept existing' && ok "dry-run keeps the existing config" || bad "dry-run did not keep the existing config"
+if printf '%s\n' "$out" | grep -q 'seed write: .codex/agents/orchestrator.toml'; then
+  bad "dry-run planned to rewrite orchestrator.toml"
+else
+  ok "dry-run does not rewrite an existing orchestrator.toml"
+fi
 
 # Apply upgrade (labels may fail-soft; files on disk are what we check)
 set +e
 out_apply="$(
-  bash "$BOOT" --repo marcelusfernandes/relentless --workdir "$TMP/repo" \
+  PATH="$TMP/bin:$PATH" \
+  bash "$BOOT" --repo o/r --workdir "$TMP/repo" \
     --harness codex --upgrade --apply --merge-default human --decider Ada --decider-github ada \
     --no-init-empty 2>&1
 )"
@@ -75,10 +106,11 @@ if [[ $rc_apply -ne 0 ]]; then
 else
   ok "apply upgrade exits 0"
 fi
-printf '%s\n' "$out_apply" | grep -q 'upgrade preserves CI' \
-  && ok "apply mentions preserve CI" || bad "apply missing preserve CI note"
-printf '%s\n' "$out_apply" | grep -q 'seed write: .codex/agents/orchestrator.toml (owned)' \
-  && ok "apply refreshes orchestrator.toml" || bad "apply did not refresh orchestrator: $out_apply"
+if printf '%s\n' "$out_apply" | grep -q 'seed write: .codex/agents/orchestrator.toml'; then
+  bad "apply rewrote orchestrator.toml"
+else
+  ok "apply does not rewrite an existing orchestrator.toml"
+fi
 
 # checks preserved
 test_cmd="$(jq -r '.checks.test' "$TMP/repo/.relentless/config.json")"
@@ -96,26 +128,16 @@ else
   bad "CI regenerated: $ci_head"
 fi
 
-# orchestrator.toml refreshed from plugin (should no longer be the stub)
+# Existing Codex files stay. Bootstrap does not edit them and does not add a pin.
 if grep -q 'old orchestrator brief' "$TMP/repo/.codex/agents/orchestrator.toml"; then
-  bad "orchestrator.toml not refreshed"
+  ok "orchestrator.toml left as the consumer wrote it"
 else
-  if grep -qi 'orchestrator\|Human decisions\|docs/decisions' "$TMP/repo/.codex/agents/orchestrator.toml"; then
-    ok "orchestrator.toml refreshed from plugin"
-  else
-    bad "orchestrator.toml content unexpected"
-  fi
+  bad "orchestrator.toml was rewritten"
 fi
-
-# Codex pin seeded
-if [[ -f "$TMP/repo/.codex/config.toml" ]] && grep -q 'marketplaces.relentless' "$TMP/repo/.codex/config.toml"; then
-  if grep -q 'ref = "v1.4.11"' "$TMP/repo/.codex/config.toml"; then
-    ok "Codex marketplace pin seeded at v1.4.11"
-  else
-    bad "Codex pin missing v1.4.11 ref"
-  fi
+if [[ -e "$TMP/repo/.codex/config.toml" ]]; then
+  bad "bootstrap wrote .codex/config.toml"
 else
-  bad "Codex config.toml pin not seeded"
+  ok "bootstrap did not add a Codex marketplace pin"
 fi
 
 # First-install path still skips existing agent file without --upgrade
@@ -123,7 +145,8 @@ mkdir -p "$TMP/fresh/.codex/agents" "$TMP/fresh/.relentless"
 echo 'STALE' > "$TMP/fresh/.codex/agents/orchestrator.toml"
 set +e
 out_fresh="$(
-  bash "$BOOT" --repo marcelusfernandes/relentless --workdir "$TMP/fresh" \
+  PATH="$TMP/bin:$PATH" \
+  bash "$BOOT" --repo o/r --workdir "$TMP/fresh" \
     --harness codex --merge-default human --decider Ada --decider-github ada \
     --no-init-empty --apply 2>&1
 )"

@@ -35,7 +35,8 @@ cat >"$REPO_DIR/.relentless/config.json" <<'JSON'
 JSON
 printf '%s\n' '{"scripts":{"test":"vitest","lint":"eslint","build":"vite build"}}' >"$REPO_DIR/package.json"
 
-# Edited forms. investigation.yml is absent so bootstrap must create it.
+# Edited forms. investigation.yml is absent. layers.templates is not set, so
+# bootstrap must leave it absent and must not rewrite the forms that exist.
 sed 's/Product outcome/Product outcome HEXGYM/' \
   "$ROOT/core/templates/github/ISSUE_TEMPLATE/epic.yml" >"$REPO_DIR/.github/ISSUE_TEMPLATE/epic.yml"
 printf '%s\n' 'blank_issues_enabled: false' 'contact_links:' '  - name: HexGym custom' \
@@ -163,12 +164,11 @@ assert_kept() {
 
 run_boot --apply
 assert_kept "apply 1"
-if [[ ! -f "$REPO_DIR/.github/ISSUE_TEMPLATE/investigation.yml" ]]; then
-  bad "apply 1 did not create the missing investigation form"
+if [[ -f "$REPO_DIR/.github/ISSUE_TEMPLATE/investigation.yml" ]]; then
+  bad "apply 1 created investigation.yml while layers.templates is not true"
 else
   ok
 fi
-inv_sum="$(sum_file "$REPO_DIR/.github/ISSUE_TEMPLATE/investigation.yml")"
 cfg_after_first="$(jq -S . "$REPO_DIR/.relentless/config.json")"
 
 run_boot --apply
@@ -178,10 +178,10 @@ assert_kept "upgrade apply 1"
 run_boot --upgrade --apply
 assert_kept "upgrade apply 2"
 
-if [[ "$(sum_file "$REPO_DIR/.github/ISSUE_TEMPLATE/investigation.yml")" == "$inv_sum" ]]; then
-  ok
+if [[ -f "$REPO_DIR/.github/ISSUE_TEMPLATE/investigation.yml" ]]; then
+  bad "later runs created the investigation form"
 else
-  bad "later runs rewrote the investigation form"
+  ok
 fi
 if [[ "$(jq -S . "$REPO_DIR/.relentless/config.json")" == "$cfg_after_first" ]]; then
   ok

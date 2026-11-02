@@ -123,6 +123,11 @@ if [[ "$1" == "issue" ]]; then
   exit 0
 fi
 if [[ "$1" == "api" ]]; then
+  # The fixture is squash-only. Answer the repo merge-settings query with that.
+  if [[ "$*" == *"allow_squash_merge"* || "$*" == *"allow_merge_commit"* || "$*" == *"squashMergeAllowed"* ]]; then
+    printf '%s\n' '{"allow_merge_commit":false,"allow_squash_merge":true,"allow_rebase_merge":false}'
+    exit 0
+  fi
   if [[ "$*" == *"check-runs"* ]]; then
     printf '%s\n' "{\"check_runs\":[{\"name\":\"consumer-test\",\"status\":\"completed\",\"conclusion\":\"success\",\"started_at\":\"2026-11-02T00:00:00Z\",\"details_url\":\"https://github.com/acme/consumer/actions/runs/99\"}]}"
     exit 0

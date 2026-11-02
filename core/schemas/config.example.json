@@ -12,19 +12,24 @@
     "default": "human",
     "allow_issue_override": true
   },
-  "rulesets": {
-    "apply": false
+  "base": "main",
+  "merge_methods": {
+    "merge": true,
+    "squash": true,
+    "rebase": true
   },
-  "milestones": {
-    "require_outcome_section": true
-  },
-  "stack": "unknown",
-  "package_manager": null,
   "checks": {
-    "install": "",
-    "lint": "",
-    "typecheck": "",
-    "test": "",
-    "build": ""
+    "test": ""
+  },
+  "layers": {
+    "merge": false,
+    "review": false,
+    "qa": false,
+    "worktrees": false,
+    "decisions": false,
+    "templates": false,
+    "ci": false,
+    "githooks": false,
+    "docs": false
   }
 }

@@ -7,11 +7,11 @@
 - **Decided by:** Marcelus
 
 ## Context
-Stacked PRs and shared checkouts caused agents to collide (dirty trees, wrong base branches, `base_ref_deleted` after merges). Lineage marvinz → apollo → lohra-ts proved one writer per worktree from fresh origin/main.
+Stacked PRs and shared checkouts caused agents to collide (dirty trees, wrong base branches, `base_ref_deleted` after merges). Lineage marvinz → apollo → lohra-ts proved one writer per worktree from a fresh copy of the repository default branch.
 
 ## Options
 
-### 1. One git worktree per implementer from origin/main; remote branch push is the lock
+### 1. One git worktree per implementer from the repository default branch; remote branch push is the lock
 - Pros: isolation; no shared dirty tree; clear lock; cleanup after merge
 - Cons: more disk; need `.worktreeinclude` for local secrets
 

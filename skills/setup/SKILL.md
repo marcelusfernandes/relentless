@@ -18,7 +18,7 @@ Goal: the consumer repo works with Relentless end-to-end (labels, real CI, docs 
 3. **decider.name** (and github login if not `gh api user`)
 4. **harness**: `claude` | `codex` | `both`
    Recommended orchestrator model: Codex sol 6.1 or astra; Claude Opus or Fable. This is a recommendation only. Do not pin it in an agent file, and do not warn automatically when another model is selected.
-5. **GitHub branch protection on main**: optional question, **off unless the user explicitly says yes**. Do not pass `--branch-protection` otherwise. Local git hooks are installed either way. When you ask, state plainly that on Codex without a sandbox the git-side hooks are advisory, since an agent can bypass them with `git push --no-verify` or `git -c core.hooksPath=/dev/null ...`, so branch protection is the only hard lock on `main` there. If they say yes, the apply command includes `--branch-protection` (fail-soft when the token cannot admin the repo). In the same breath, warn that private and organization repositories have GitHub Actions minute limits. When the quota or spending limit is exhausted, the harness runs the configured checks locally on the PR head and notes that on the PR; `merge:auto` may merge and `merge:human` still waits for a person. A self-hosted runner is how to keep real Actions CI. The agent does not merge on local checks when the mode is `merge:human`. If no test command is configured, the run stops at `human:pending`.
+5. **GitHub branch protection on main**: optional question, **off unless the user explicitly says yes**. Do not pass `--branch-protection` otherwise. Git hooks are the `githooks` layer and stay off on a fresh bootstrap. When you ask, state plainly that on Codex without a sandbox the git-side hooks are advisory, since an agent can bypass them with `git push --no-verify` or `git -c core.hooksPath=/dev/null ...`, so branch protection is the only hard lock on `main` there. If they say yes, the apply command includes `--branch-protection` (fail-soft when the token cannot admin the repo). In the same breath, warn that private and organization repositories have GitHub Actions minute limits. When the quota or spending limit is exhausted, the harness runs the configured checks locally on the PR head and notes that on the PR; `merge:auto` may merge and `merge:human` still waits for a person. A self-hosted runner is how to keep real Actions CI. The agent does not merge on local checks when the mode is `merge:human`. If no test command is configured, the run stops at `human:pending`.
 6. Optional: **first product outcome** text → after apply, create milestone + epic
 
 ## Upgrade (existing Relentless consumer)
@@ -30,7 +30,7 @@ If the repo already has Relentless and you only need the new agent briefs / docs
   --harness both --upgrade --apply
 ```
 
-Adds only what is missing. Keeps customized checks, stack, package manager, merge default, issue forms, and an existing or deleted `relentless-ci.yml`. Then commit on a branch and open a PR as usual.
+Adds a missing config, the docs block, and missing core labels. Does not edit an existing config, label, template, workflow, or `.codex` file. Then commit on a branch and open a PR as usual.
 
 ## Plugin install (before or during)
 
@@ -76,14 +76,13 @@ branch="chore/relentless-setup"
 git checkout -b "$branch"
 git add AGENTS.md CLAUDE.md .relentless .github docs/relentless .codex 2>/dev/null || true
 git status
-git commit -m "chore: Relentless setup (labels, CI, docs, issue forms)"
+git commit -m "chore: Relentless setup (config, docs, core labels)"
 git push -u origin HEAD
 gh pr create --title "chore: Relentless setup" --body "## Relentless setup
 
-- Stack-detected CI (\`.github/workflows/relentless-ci.yml\`)
-- Idempotent AGENTS.md / CLAUDE.md blocks
-- Issue forms (relentless, investigation, epic) + blank_issues disabled
-- \`.relentless/config.json\` with checks + merge.default
+- \`.relentless/config.json\` with \`base\`, allowed merge methods, and checks from the repo
+- AGENTS.md / CLAUDE.md blocks
+- Missing core labels only
 "
 ```
 
@@ -105,12 +104,10 @@ If the user described a product outcome:
 
 | Artifact | Behavior |
 |----------|----------|
-| Labels | Idempotent create/edit from `labels.json` |
-| CI | `relentless-ci.yml` with real commands **or** FAIL-closed if no test |
-| Docs | `<!-- relentless:start -->` blocks upserted (never skip existing files) |
-| Issues | `relentless.yml` + `investigation.yml` + `epic.yml` + `config.yml` |
-| Config | `checks.{install,lint,typecheck,test,build}` + `stack` |
-| Git hooks | `.relentless/githooks/pre-commit` and `pre-push`. `core.hooksPath` points at them, or an existing hooksPath / husky is chained and not replaced. They refuse commits on main/master, pushes to main/master, and non-fast-forward pushes. |
+| Labels | Create missing core labels only (`state:*`, `human:pending`, `human:decided`, `epic`). Never edit an existing label. |
+| Config | New file only: `base`, allowed merge methods, `checks.test` from the repo's CI, and `layers.*` all false. An existing config is not edited. |
+| Docs | `<!-- relentless:start -->` blocks upserted. |
+| Layers | CI, templates, githooks, and decisions run only when `layers.<name>` is already true. A fresh bootstrap leaves them off. |
 | Branch protection | **Off** unless the setup question was answered yes (`--branch-protection`, fail-soft). On Codex without a sandbox the git hooks are advisory (`git push --no-verify` or `git -c core.hooksPath=/dev/null ...`); branch protection is the only hard lock on `main` there. Private and organization repos have Actions minute limits; when they are exhausted, `merge-if-ready` falls back to local checks and notes it on the PR. A self-hosted runner keeps real CI. `merge:human` still waits. |
 
 Never vendor plugin `agents/` / `skills/` into the consumer.
@@ -121,7 +118,7 @@ Never vendor plugin `agents/` / `skills/` into the consumer.
 Once the user describes the product, the **orchestrator** (not a human driver) must:
 1. Create milestone + epic + sub-issues
 2. Implement → QA → `state:review`
-3. Spawn isolated reviewer itself (`run-isolated-review.sh --merge` or equivalent nested `claude`/`codex`)
+3. Spawn isolated reviewer itself (`run-isolated-review.sh --also-merge` or equivalent nested `claude`/`codex`)
 4. Continue to `merge-if-ready` without waiting for a resume prompt
 
 Dogfood / real-user simulation: install plugin → `/relentless:setup` → answer questions → ask for the product. No mid-flow human wiring of review/merge.
