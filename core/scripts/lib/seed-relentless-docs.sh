@@ -118,16 +118,25 @@ upsert_relentless_block() {
   if grep -q "$RELENTLESS_BLOCK_START" "$path" 2>/dev/null; then
     local tmp
     tmp="$(mktemp)"
-    # Replace existing block (non-greedy via awk)
-    awk -v start="$RELENTLESS_BLOCK_START" -v end="$RELENTLESS_BLOCK_END" -v block="$block" '
-      BEGIN { printing=1 }
+    # ENVIRON keeps newlines. awk -v drops them on BSD awk, so a multi-line
+    # block would be written as its first line only.
+    RELENTLESS_BLOCK_BODY="$block" \
+      RELENTLESS_BLOCK_START_MARK="$RELENTLESS_BLOCK_START" \
+      RELENTLESS_BLOCK_END_MARK="$RELENTLESS_BLOCK_END" \
+      awk '
+      BEGIN {
+        start = ENVIRON["RELENTLESS_BLOCK_START_MARK"]
+        end = ENVIRON["RELENTLESS_BLOCK_END_MARK"]
+        block = ENVIRON["RELENTLESS_BLOCK_BODY"]
+        printing = 1
+      }
       index($0, start) == 1 {
         print block
-        printing=0
+        printing = 0
         next
       }
       index($0, end) == 1 {
-        printing=1
+        printing = 1
         next
       }
       printing { print }

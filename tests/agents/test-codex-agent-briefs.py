@@ -226,7 +226,8 @@ SENTENCE_PARITY = {
     ],
     "orchestrator": [
         "If CI is red, read the failed job before touching code. If no test step ran (startup_failure, billing, spending limit, or minutes exhausted), it is not a code failure: do not change code, do not retry CI, and do not run or report checks yourself. Run merge-if-ready, which runs the checks on the PR head and decides. If it reports a local check failure, treat it as a normal test failure.",
-        "If merge-if-ready exits non-zero, never post its messages, apply merge labels or merge yourself. Quote its output on the issue, label it `human:pending` with the reason, and stop.",
+        "If `merge-if-ready` exits non-zero, never post its messages, apply merge labels or merge yourself. Run `request-decision.sh` on the issue with its output quoted as context, and stop.",
+        "Run the reviewer only through `run-isolated-review.sh`; never call it as a subagent.",
         'Write to an ADR only after an explicit decision by `decider.name`, verified by the decide record on the linked issue. In one commit on the **same branch where the decision was taken**, rewrite `## Decision` with the current decision under "Decided YYYY-MM-DD (new decision)", append its line to `docs/decisions/log.jsonl`, and update `docs/decisions/README.md` if the ADR title or status changed. Never change `Status` or `Decided by`. Ship that commit with **that PR** — do not park the log on a separate branch, and do not defer it to a later orchestrator PR.',
         "Append one line to `docs/decisions/log.jsonl` for every human decision (`human_decide`) and every binding decision of yours that closes or redirects work: `merge`, `auto_merge_no_ci`, `changes_requested`. Do **not** log routine `state_change` label flips. Each line is one JSON object with `ts`, `kind`, `from`, `to`, `issue`, `pr`, `adr`, `option`, `summary`, `decider`, `commit`; `decider` comes from `decider.name`; a missing value is null. Never rewrite a line; a correction is a new line citing the `ts` it corrects.",
         "Record ADR rewrites and `human_decide` log lines **before** requesting isolated review (commits after `review:approved` invalidate the SHA-bound approval). For `merge` / `auto_merge_no_ci` / `changes_requested`, append the log line on the branch that owns that decision and push it with a real PR (never an orphan docs branch with no PR).",
@@ -236,7 +237,7 @@ SENTENCE_PARITY = {
 }
 
 # The orchestrator owns merge-if-ready failures. The implementer stops at review.
-IMPLEMENTER_MUST_NOT = "If merge-if-ready exits non-zero, never post its messages, apply merge labels or merge yourself. Quote its output on the issue, label it `human:pending` with the reason, and stop."
+IMPLEMENTER_MUST_NOT = "If `merge-if-ready` exits non-zero, never post its messages, apply merge labels or merge yourself. Run `request-decision.sh` on the issue with its output quoted as context, and stop."
 
 
 def normalize_emphasis(text: str) -> str:

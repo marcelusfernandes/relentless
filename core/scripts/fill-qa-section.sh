@@ -33,10 +33,12 @@ if [[ "$PATCH" -eq 1 ]]; then
   # Best-effort: replace ## QA / dogfood result section in PR body
   BODY="$(gh pr view "$PR" --repo "$REPO" --json body -q .body)"
   QA="$(cat "$BODY_FILE")"
-  NEW="$(printf '%s\n' "$BODY" | awk -v qa="$QA" '
-    BEGIN { inqa=0 }
-    /^## QA \/ dogfood result/ { print; print qa; inqa=1; next }
-    /^## / && inqa { inqa=0 }
+  # ENVIRON keeps newlines. awk -v drops them on BSD awk, so a multi-line QA
+  # report would be stored as its first line only.
+  NEW="$(printf '%s\n' "$BODY" | QA="$QA" awk '
+    BEGIN { qa = ENVIRON["QA"]; inqa = 0 }
+    /^## QA \/ dogfood result/ { print; print qa; inqa = 1; next }
+    /^## / && inqa { inqa = 0 }
     inqa { next }
     { print }
   ')"

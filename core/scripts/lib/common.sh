@@ -87,15 +87,23 @@ check_gh_workflow_scope() {
 }
 
 # resolve_merge_mode REPO ISSUE CONFIG → prints auto|human
+# allow_issue_override false: ignore merge:* labels and use merge.default.
+# true (or omitted): a merge:* label on the issue wins. merge:human beats merge:auto.
 resolve_merge_mode() {
   local repo="$1" issue="$2" config="${3:-}"
-  local labels
-  labels="$(gh api "repos/${repo}/issues/${issue}" --jq '[.labels[].name] | join("\n")' 2>/dev/null || true)"  # intentional fail-soft
-  if echo "$labels" | grep -Fxq "merge:human"; then
-    echo "human"; return 0
+  local allow="true" labels
+  if [[ -n "$config" && -f "$config" ]]; then
+    # `//` treats JSON false as empty, so a boolean false must be read with has().
+    allow="$(jq -r 'if (.merge | type) == "object" and (.merge | has("allow_issue_override")) then (.merge.allow_issue_override | tostring) else "true" end' "$config")"
   fi
-  if echo "$labels" | grep -Fxq "merge:auto"; then
-    echo "auto"; return 0
+  if [[ "$allow" != "false" ]]; then
+    labels="$(gh api "repos/${repo}/issues/${issue}" --jq '[.labels[].name] | join("\n")' 2>/dev/null || true)"  # intentional fail-soft
+    if echo "$labels" | grep -Fxq "merge:human"; then
+      echo "human"; return 0
+    fi
+    if echo "$labels" | grep -Fxq "merge:auto"; then
+      echo "auto"; return 0
+    fi
   fi
   if [[ -n "$config" && -f "$config" ]]; then
     jq -r '.merge.default // "human"' "$config"

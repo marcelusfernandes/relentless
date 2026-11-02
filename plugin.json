@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "relentless",
-  "version": "1.4.9",
+  "version": "1.4.10",
   "description": "Reusable agent workflow for Claude Code and Codex: product-outcome milestones, human decision gates, configurable merge policy, isolated reviewer.",
   "author": {
     "name": "Marcelus Fernandes",

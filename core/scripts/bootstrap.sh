@@ -43,17 +43,17 @@ Usage: $(basename "$0") --repo OWNER/NAME [options]
                            Which agent harness this repo uses (default: both).
   --branch-protection      Opt in to GitHub branch protection on the default
                            branch. Off unless this flag is passed. Fail-soft.
-  --upgrade                Refresh Relentless-owned files that already exist
-                           (Codex agent TOMLs, issue forms, docs blocks).
-                           Preserves consumer-customized .checks and does not
-                           regenerate .github/workflows/relentless-ci.yml when
-                           that file already exists. First-time install still
-                           uses plain --apply (seed_copy skips existing files).
+  --upgrade                Refresh Codex agent TOMLs and docs blocks that
+                           Relentless owns. Does not rewrite issue forms,
+                           labels, or existing config values. Same add-only
+                           rule as plain --apply.
 
-Detects stack under --workdir, writes .github/workflows/relentless-ci.yml (real
-checks or FAIL-closed placeholder), upserts <!-- relentless:start --> blocks in
-AGENTS.md / CLAUDE.md, seeds issue forms including epic + config.yml
-(blank_issues_enabled: false), records checks in .relentless/config.json.
+Detects stack under --workdir. Writes .github/workflows/relentless-ci.yml
+only on the first bootstrap (when config.json does not exist yet); a file
+removed later stays absent. Upserts <!-- relentless:start --> blocks in
+AGENTS.md / CLAUDE.md, seeds missing issue forms including epic + config.yml
+(blank_issues_enabled: false), and fills missing config keys. Existing
+stack, package_manager, checks, and merge.default are left as they are.
 Installs .relentless/githooks (pre-commit, pre-push) via core.hooksPath, or
 chains an existing hooksPath / husky without replacing it. GitHub branch
 protection stays off unless --branch-protection.
@@ -102,13 +102,18 @@ MODE="DRY-RUN"; [[ "$APPLY" -eq 1 ]] && MODE="APPLY"
 UPGRADE_LABEL=""; [[ "$UPGRADE" -eq 1 ]] && UPGRADE_LABEL=" upgrade"
 echo "== Relentless bootstrap ($MODE$UPGRADE_LABEL) on $REPO (harness=$HARNESS) =="
 
+# Captured before any write. relentless-ci.yml is created only when this is 0.
+CONFIG_EXISTED=0
+if [[ -n "$WORKDIR" && -f "${WORKDIR}/.relentless/config.json" ]]; then
+  CONFIG_EXISTED=1
+fi
+
 SCOPE_OK=0
 if check_gh_workflow_scope; then SCOPE_OK=1
 else
-  # --upgrade refreshes owned files and preserves existing CI; it does not need
-  # to push new workflow YAML. Allow apply so consumers can upgrade without the
-  # workflow OAuth scope (GHA tokens often lack it).
-  if [[ "$APPLY" -eq 1 && "$SEED_FILES" -eq 1 && "$UPGRADE" -eq 0 ]]; then
+  # Workflow scope is required only when this run would create the workflow
+  # file (first bootstrap). A later --apply does not push workflow YAML.
+  if [[ "$APPLY" -eq 1 && "$SEED_FILES" -eq 1 && "$CONFIG_EXISTED" -eq 0 ]]; then
     echo "error: refusing --apply with seed files while 'workflow' scope is missing." >&2
     exit 1
   fi
@@ -192,7 +197,10 @@ fi
 write_or_patch_config() {
   local dest="$1"
   mkdir -p "$(dirname "$dest")"
-  if [[ ! -f "$dest" ]]; then
+  local existed=0
+  if [[ -f "$dest" ]]; then
+    existed=1
+  else
     cp "$SCHEMA_EXAMPLE" "$dest"
   fi
   local login
@@ -201,42 +209,56 @@ write_or_patch_config() {
   local merge="${MERGE_DEFAULT:-}"
   local tmp
   tmp="$(mktemp)"
-  # On --upgrade, keep consumer-customized checks (F47). Fresh installs still
-  # get detected stack checks. Missing checks keys are filled either way.
+  # A new file takes the detected stack and checks. An existing file keeps
+  # every value it already has, including custom keys; only missing keys
+  # are filled. stack, package_manager, checks, and merge.default are not
+  # overwritten. --branch-protection still opts in when the flag is passed.
   jq --arg name "$name" --arg gh "$login" --arg merge "$merge" \
     --arg stack "$STACK" --arg pm "$PM" \
     --arg install "$INSTALL" --arg lint "$LINT" --arg typecheck "$TYPECHECK" \
     --arg test "$TEST" --arg build "$BUILD" \
     --argjson bp "${BRANCH_PROTECTION:-0}" \
-    --argjson upgrade "${UPGRADE:-0}" \
+    --argjson existed "$existed" \
+    --slurpfile example "$SCHEMA_EXAMPLE" \
     '
-    if ($name | length) > 0 then .decider.name = $name else . end |
-    if ($gh | length) > 0 then .decider.github = $gh | .workers.default.github = $gh else . end |
-    if ($merge | length) > 0 then .merge.default = $merge else . end |
-    if $bp == 1 then .rulesets = ((.rulesets // {}) + {apply: true}) else . end |
-    .stack = $stack |
-    .package_manager = (if $pm | length > 0 then $pm else null end) |
-    (if $upgrade == 1 and (.checks | type == "object") then
-      .checks = (
-        .checks
-        | .install = (if (.install // "") == "" then $install else .install end)
-        | .lint = (if (.lint // "") == "" then $lint else .lint end)
-        | .typecheck = (if (.typecheck // "") == "" then $typecheck else .typecheck end)
-        | .test = (if (.test // "") == "" then $test else .test end)
-        | .build = (if (.build // "") == "" then $build else .build end)
-      )
+    # Arguments are filters, so bind them before reduce (inside reduce, "." is the accumulator).
+    def fill(d; c):
+      d as $d | c as $c |
+      if ($d|type) == "object" and ($c|type) == "object" then
+        reduce (($d + $c) | keys_unsorted[]) as $k
+          ({};
+            .[$k] = (
+              if (($c|has($k)) and ($d|has($k))
+                  and (($d[$k]|type) == "object") and (($c[$k]|type) == "object"))
+              then fill($d[$k]; $c[$k])
+              elif ($c|has($k)) then $c[$k]
+              else $d[$k] end
+            ))
+      else $c end;
+    def detected:
+      if ($name | length) > 0 then .decider.name = $name else . end
+      | if ($gh | length) > 0 then .decider.github = $gh | .workers.default.github = $gh else . end
+      | if ($merge | length) > 0 then .merge.default = $merge else . end
+      | if $bp == 1 then .rulesets = ((.rulesets // {}) + {apply: true}) else . end
+      | .stack = $stack
+      | .package_manager = (if ($pm | length) > 0 then $pm else null end)
+      | .checks = {
+          install: $install,
+          lint: $lint,
+          typecheck: $typecheck,
+          test: $test,
+          build: $build
+        };
+    if $existed == 0 then
+      detected
     else
-      .checks = {
-        install: $install,
-        lint: $lint,
-        typecheck: $typecheck,
-        test: $test,
-        build: $build
-      }
-    end)
+      . as $cur
+      | fill(($example[0] | detected); $cur)
+      | if $bp == 1 then .rulesets = ((.rulesets // {}) + {apply: true}) else . end
+    end
     ' "$dest" >"$tmp" && mv "$tmp" "$dest"
-  if [[ "${UPGRADE:-0}" -eq 1 ]]; then
-    echo "config written: $dest (upgrade: preserved existing checks; merge.default=$(jq -r .merge.default "$dest"), stack=$(jq -r .stack "$dest"), decider=$(jq -r .decider.name "$dest"))"
+  if [[ "$existed" -eq 1 ]]; then
+    echo "config written: $dest (kept existing stack, package_manager, checks, merge.default; merge.default=$(jq -r .merge.default "$dest"), stack=$(jq -r .stack "$dest"), decider=$(jq -r .decider.name "$dest"))"
   else
     echo "config written: $dest (merge.default=$(jq -r .merge.default "$dest"), stack=$(jq -r .stack "$dest"), decider=$(jq -r .decider.name "$dest"))"
   fi
@@ -271,9 +293,6 @@ while IFS= read -r row; do
   desc="$(jq -r '.description' <<<"$row")"
   if grep -Fxq "$name" <<<"$EXISTING"; then
     echo "label exists: $name"
-    if [[ "$APPLY" -eq 1 ]]; then
-      gh label edit "$name" --repo "$REPO" --color "$color" --description "$desc" >/dev/null || true  # intentional fail-soft
-    fi
   else
     echo "label create: $name"
     if [[ "$APPLY" -eq 1 ]]; then
@@ -328,11 +347,11 @@ if [[ "$SEED_FILES" -eq 1 ]]; then
     echo "seed (needs --workdir): .relentless/config.json"
   fi
 
-  # Issue forms — Relentless-owned, refresh
-  seed_write "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/relentless.yml" ".github/ISSUE_TEMPLATE/relentless.yml"
-  seed_write "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/investigation.yml" ".github/ISSUE_TEMPLATE/investigation.yml"
-  seed_write "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/epic.yml" ".github/ISSUE_TEMPLATE/epic.yml"
-  seed_write "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/config.yml" ".github/ISSUE_TEMPLATE/config.yml"
+  # Issue forms are created when missing and left alone when present.
+  seed_copy "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/relentless.yml" ".github/ISSUE_TEMPLATE/relentless.yml"
+  seed_copy "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/investigation.yml" ".github/ISSUE_TEMPLATE/investigation.yml"
+  seed_copy "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/epic.yml" ".github/ISSUE_TEMPLATE/epic.yml"
+  seed_copy "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/config.yml" ".github/ISSUE_TEMPLATE/config.yml"
   seed_copy "${TEMPLATES_ROOT}/github/PULL_REQUEST_TEMPLATE.md" ".github/PULL_REQUEST_TEMPLATE.md"
   # Starter ignore. Skip when the consumer already has one.
   seed_copy "${TEMPLATES_ROOT}/gitignore" ".gitignore"
@@ -414,10 +433,16 @@ EOF
     echo "seed skip (--harness claude): .codex/agents/*.toml"
   fi
 
-  # CI — first install writes relentless-ci.yml; --upgrade keeps an existing file (F47).
-  # Preserve path runs even without workflow scope so dry-run/upgrade messaging stays honest.
-  if [[ -n "$WORKDIR" && "$UPGRADE" -eq 1 && -f "${WORKDIR}/.github/workflows/relentless-ci.yml" ]]; then
-    echo "seed skip (upgrade preserves CI): .github/workflows/relentless-ci.yml"
+  # CI is written only on the first bootstrap (config.json was absent).
+  # An existing file is kept. A file deleted after that stays deleted.
+  if [[ -n "$WORKDIR" && -f "${WORKDIR}/.github/workflows/relentless-ci.yml" ]]; then
+    if [[ "$UPGRADE" -eq 1 ]]; then
+      echo "seed skip (upgrade preserves CI): .github/workflows/relentless-ci.yml"
+    else
+      echo "seed skip (exists): .github/workflows/relentless-ci.yml"
+    fi
+  elif [[ "$CONFIG_EXISTED" -eq 1 ]]; then
+    echo "seed skip (config already present; workflow file stays absent): .github/workflows/relentless-ci.yml"
   elif [[ "$SCOPE_OK" -eq 1 ]]; then
     if [[ -n "$WORKDIR" ]]; then
       echo "seed write: .github/workflows/relentless-ci.yml (stack=${STACK} has_test=${HAS_TEST})"
@@ -532,4 +557,4 @@ echo "tip: Claude — install at PROJECT scope:"
 echo "     claude plugin marketplace add marcelusfernandes/relentless"
 echo "     claude plugin install relentless@relentless --scope project -y"
 echo "tip: Codex (0.165.x) user-level only: codex plugin add relentless@relentless"
-echo "tip: upgrading an existing consumer: re-run with --upgrade --apply (refreshes owned files, keeps checks + CI)."
+echo "tip: re-run --apply or --upgrade --apply to add what is missing. Existing labels, forms, config values, and relentless-ci.yml stay as they are."

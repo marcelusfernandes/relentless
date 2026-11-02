@@ -4,6 +4,10 @@
 # background it, and headless Claude then stops the session when that task is
 # still running after the turn (CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS).
 #
+# The verdict is the checks on the PR head SHA, by check name (for example
+# tests-ok). A newer green run of a different workflow on the same branch
+# does not cover a red check on that SHA.
+#
 # One invocation polls until --timeout-sec (default 30), then returns:
 #   0  CI green
 #   1  CI failed (a test or other real job ran and failed)
@@ -34,7 +38,13 @@ done
 INTERVAL=5
 run_id=""
 status=""
-BRANCH="$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq .headRefName)"
+HEAD_JSON="$(gh pr view "$PR" --repo "$REPO" --json headRefOid,headRefName 2>/dev/null || true)"  # intentional fail-soft: no PR payload yet is pending
+SHA=""
+BRANCH=""
+if [[ -n "$HEAD_JSON" ]]; then
+  SHA="$(jq -r '.headRefOid // empty' <<<"$HEAD_JSON" 2>/dev/null || true)"  # intentional fail-soft
+  BRANCH="$(jq -r '.headRefName // empty' <<<"$HEAD_JSON" 2>/dev/null || true)"  # intentional fail-soft
+fi
 deadline=$((SECONDS + TIMEOUT))
 
 pending() {
@@ -102,57 +112,185 @@ run_is_quota() {
   return 1
 }
 
-while (( SECONDS < deadline )); do
-  raw="$(gh run list --repo "$REPO" --branch "$BRANCH" --limit 1 --json databaseId,status,conclusion 2>/dev/null || true)"  # intentional fail-soft: no run yet is pending, not a failure
-  run_id="" status="" conclusion=""
-  if [[ -n "$raw" && "$raw" != "null" ]]; then
-    run_id="$(jq -r '.[0].databaseId // empty' <<<"$raw" 2>/dev/null || true)"  # intentional fail-soft
-    status="$(jq -r '.[0].status // empty' <<<"$raw" 2>/dev/null || true)"  # intentional fail-soft
-    conclusion="$(jq -r '.[0].conclusion // empty' <<<"$raw" 2>/dev/null || true)"  # intentional fail-soft
-  fi
+# JSON array of the latest check per name: {name,status,conclusion,run_id}.
+# Check runs on the head SHA win. Workflow runs are the fallback when that
+# list is empty, and every run for the SHA is kept (not only the newest).
+latest_check_runs() {
+  local sha="$1" raw="" out=""
+  [[ -n "$sha" ]] || { printf '%s\n' '[]'; return 0; }
+  raw="$(gh api "repos/${REPO}/commits/${sha}/check-runs?per_page=100" 2>/dev/null || true)"  # intentional fail-soft: no checks yet is pending
+  [[ -n "$raw" ]] || { printf '%s\n' '[]'; return 0; }
+  out="$(jq -c '
+    if type != "object" or (.check_runs | type) != "array" then []
+    else
+      [ .check_runs
+        | group_by(.name)
+        | .[]
+        | sort_by(.started_at // "")
+        | last
+        | {
+            name,
+            status: (.status // ""),
+            conclusion: (.conclusion // ""),
+            run_id: (
+              (.details_url // "") as $u
+              | if ($u | test("/actions/runs/[0-9]+")) then ($u | capture("/actions/runs/(?<id>[0-9]+)").id) else "" end
+            )
+          }
+      ]
+    end
+  ' <<<"$raw" 2>/dev/null || true)"  # intentional fail-soft: a non-check payload is no checks
+  [[ -n "$out" ]] || out='[]'
+  printf '%s\n' "$out"
+}
 
-  if [[ -n "$run_id" && "$status" == "completed" ]]; then
-    case "$conclusion" in
-      success)
-        echo "CI green (run $run_id)"
-        exit 0
-        ;;
-      startup_failure)
-        quota_exit
-        ;;
-      failure|cancelled|timed_out|action_required)
-        if run_is_quota "$run_id"; then
-          quota_exit
-        fi
-        echo "CI failed (run $run_id conclusion=$conclusion)" >&2
-        exit 1
-        ;;
-    esac
-  fi
-
-  set +e
-  out="$(gh pr checks "$PR" --repo "$REPO" 2>&1)"
-  rc=$?
-  set -e
-  if [[ $rc -eq 0 ]]; then
-    echo "CI green"
-    exit 0
-  fi
-  # Quota before the generic fail match: "startup_failure" contains "fail".
-  if printf '%s\n' "$out" | grep -qiE 'startup_failure' || printf '%s\n' "$out" | text_is_quota; then
-    quota_exit
-  fi
-  if echo "$out" | grep -qiE 'fail|error|cancelled'; then
-    echo "CI failed" >&2
-    echo "$out" >&2
-    exit 1
-  fi
-
-  if [[ -n "$run_id" ]]; then
-    echo "CI: pending (run $run_id ${status:-unknown}) — still in this foreground poll"
+latest_workflow_runs() {
+  local sha="$1" branch="$2" raw="" out=""
+  if [[ -n "$sha" ]]; then
+    raw="$(gh run list --repo "$REPO" --commit "$sha" --limit 50 --json databaseId,status,conclusion,name,headSha,workflowName,createdAt 2>/dev/null || true)"  # intentional fail-soft: no run yet is pending, not a failure
+  elif [[ -n "$branch" ]]; then
+    raw="$(gh run list --repo "$REPO" --branch "$branch" --limit 50 --json databaseId,status,conclusion,name,headSha,workflowName,createdAt 2>/dev/null || true)"  # intentional fail-soft: no run yet is pending, not a failure
   else
-    echo "CI: pending — no checks yet (${out:0:80})"
+    printf '%s\n' '[]'
+    return 0
   fi
+  [[ -n "$raw" && "$raw" != "null" && "$raw" != "[]" ]] || { printf '%s\n' '[]'; return 0; }
+  out="$(jq -c --arg sha "$sha" '
+    if type != "array" then []
+    else
+      [ .[]
+        | select(($sha == "") or ((.headSha // "") == "") or (.headSha == $sha))
+        | {
+            name: (.name // .workflowName // (.databaseId | tostring)),
+            status: (.status // ""),
+            conclusion: (.conclusion // ""),
+            run_id: (.databaseId | tostring),
+            ord: (.createdAt // (.databaseId | tostring))
+          }
+      ]
+      | group_by(.name)
+      | [ .[] | sort_by(.ord) | last | del(.ord) ]
+    end
+  ' <<<"$raw" 2>/dev/null || true)"  # intentional fail-soft: unexpected run-list JSON is no runs
+  [[ -n "$out" ]] || out='[]'
+  printf '%s\n' "$out"
+}
+
+# Prints "verdict<TAB>run_id<TAB>status". The caller reads it in this shell;
+# a command substitution would drop assignments made here.
+judge_checks() {
+  local json="$1" count="" failed_n="" pending_n="" all_quota=1 row="" cid="" conc="" rid="" st=""
+  count="$(jq 'length' <<<"$json" 2>/dev/null || echo 0)"
+  if [[ "$count" -eq 0 ]]; then
+    printf 'none\t\t\n'
+    return 0
+  fi
+  failed_n="$(jq '[.[] | select(.status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required" or .conclusion == "startup_failure"))] | length' <<<"$json")"
+  pending_n="$(jq '[.[] | select(.status != "completed")] | length' <<<"$json")"
+  if [[ "$failed_n" -gt 0 ]]; then
+    rid=""
+    st="completed"
+    while IFS= read -r row; do
+      [[ -n "$row" ]] || continue
+      cid="$(jq -r '.run_id // empty' <<<"$row")"
+      conc="$(jq -r '.conclusion // empty' <<<"$row")"
+      rid="$cid"
+      if [[ "$conc" == "startup_failure" ]]; then
+        continue
+      fi
+      if [[ -z "$cid" ]] || ! run_is_quota "$cid"; then
+        all_quota=0
+        break
+      fi
+    done < <(jq -c '.[] | select(.status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required" or .conclusion == "startup_failure"))' <<<"$json")
+    if [[ "$all_quota" -eq 1 ]]; then
+      printf 'quota\t%s\t%s\n' "$rid" "$st"
+    else
+      printf 'failed\t%s\t%s\n' "$rid" "$st"
+    fi
+    return 0
+  fi
+  if [[ "$pending_n" -gt 0 ]]; then
+    rid="$(jq -r '[.[] | select(.status != "completed") | .run_id] | map(select(. != "")) | .[0] // empty' <<<"$json")"
+    st="$(jq -r '[.[] | select(.status != "completed") | .status] | .[0] // "pending"' <<<"$json")"
+    printf 'pending\t%s\t%s\n' "$rid" "$st"
+    return 0
+  fi
+  rid="$(jq -r '[.[].run_id] | map(select(. != "")) | .[0] // empty' <<<"$json")"
+  printf 'green\t%s\tcompleted\n' "$rid"
+}
+
+while (( SECONDS < deadline )); do
+  verdict="none"
+  run_id=""
+  status=""
+  checks="[]"
+  runs="[]"
+  parsed=""
+  if [[ -n "$SHA" ]]; then
+    checks="$(latest_check_runs "$SHA")"
+  fi
+  [[ -n "$checks" ]] || checks="[]"
+  if [[ "$(jq 'length' <<<"$checks")" -gt 0 ]]; then
+    parsed="$(judge_checks "$checks")"
+  else
+    runs="$(latest_workflow_runs "$SHA" "$BRANCH")"
+    [[ -n "$runs" ]] || runs="[]"
+    if [[ "$(jq 'length' <<<"$runs")" -gt 0 ]]; then
+      parsed="$(judge_checks "$runs")"
+    fi
+  fi
+  if [[ -n "$parsed" ]]; then
+    verdict="${parsed%%$'\t'*}"
+    parsed="${parsed#*$'\t'}"
+    run_id="${parsed%%$'\t'*}"
+    status="${parsed#*$'\t'}"
+  fi
+
+  case "$verdict" in
+    green)
+      if [[ -n "$run_id" ]]; then
+        echo "CI green (run $run_id)"
+      else
+        echo "CI green"
+      fi
+      exit 0
+      ;;
+    quota)
+      quota_exit
+      ;;
+    failed)
+      echo "CI failed (run ${run_id:-unknown} conclusion=failure)" >&2
+      exit 1
+      ;;
+    pending)
+      echo "CI: pending (run ${run_id:-unknown} ${status:-unknown}) — still in this foreground poll"
+      ;;
+    none)
+      set +e
+      out="$(gh pr checks "$PR" --repo "$REPO" 2>&1)"
+      rc=$?
+      set -e
+      if [[ $rc -eq 0 ]]; then
+        echo "CI green"
+        exit 0
+      fi
+      # Quota before the generic fail match: "startup_failure" contains "fail".
+      if printf '%s\n' "$out" | grep -qiE 'startup_failure' || printf '%s\n' "$out" | text_is_quota; then
+        quota_exit
+      fi
+      if echo "$out" | grep -qiE 'fail|error|cancelled'; then
+        echo "CI failed" >&2
+        echo "$out" >&2
+        exit 1
+      fi
+      if [[ -n "$run_id" ]]; then
+        echo "CI: pending (run $run_id ${status:-unknown}) — still in this foreground poll"
+      else
+        echo "CI: pending — no checks yet (${out:0:80})"
+      fi
+      ;;
+  esac
 
   remaining=$((deadline - SECONDS))
   if (( remaining <= 0 )); then

@@ -33,5 +33,5 @@ core/scripts/bootstrap.sh --repo OWNER/NAME --workdir PATH \
   --harness both --upgrade --apply
 ```
 
-Refreshes Relentless-owned Codex agent TOMLs and issue forms; preserves consumer `checks` and an existing `relentless-ci.yml`. Seeds `.codex/config.toml` marketplace pin when missing.
+Refreshes Codex agent TOMLs and docs blocks. Adds missing labels, config keys, and templates without rewriting ones that exist. Does not overwrite `stack`, `package_manager`, `checks`, or `merge.default`. Creates `relentless-ci.yml` only on the first bootstrap. Seeds `.codex/config.toml` marketplace pin when missing.
 

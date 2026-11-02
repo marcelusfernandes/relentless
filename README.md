@@ -107,7 +107,7 @@ Plain `--apply` still uses `seed_copy` (skips files that already exist). To refr
   --harness both --upgrade --apply
 ```
 
-`--upgrade` refreshes Codex `.codex/agents/*.toml` and issue forms, upserts the Relentless docs blocks, and **preserves** existing `.relentless/config.json` `checks` plus an existing `.github/workflows/relentless-ci.yml` (so a Playwright e2e job you added is not dropped). It also seeds or appends a Codex marketplace pin in `.codex/config.toml` (`ref = "v1.4.9"`) when missing — Codex 0.165.x has no native per-project plugin lockfile; that pin is the supported workaround. Edit `ref=` when you bump, then reinstall/upgrade the marketplace.
+`--upgrade` refreshes Codex `.codex/agents/*.toml` and upserts the Relentless docs blocks. It adds missing labels, config keys, and issue forms, and leaves existing ones alone (no label edits, no rewritten forms or `ISSUE_TEMPLATE/config.yml`). It does not overwrite `stack`, `package_manager`, `checks`, or `merge.default`. `relentless-ci.yml` is created only on the first bootstrap; an existing file is kept, and one you delete stays deleted. It also seeds or appends a Codex marketplace pin in `.codex/config.toml` (`ref = "v1.4.10"`) when missing — Codex 0.165.x has no native per-project plugin lockfile; that pin is the supported workaround. Edit `ref=` when you bump, then reinstall/upgrade the marketplace.
 
 ### 4. First product request
 
