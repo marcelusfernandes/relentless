@@ -68,7 +68,10 @@ while IFS= read -r row; do
   fi
 
   # Epic parent (prefer open epic; fall back to any epic in the milestone)
-  mapfile -t EPIC_ROWS < <(gh issue list --repo "$REPO" --milestone "$title" --state all --label epic \
+  EPIC_ROWS=()
+  while IFS= read -r epic_row || [[ -n "$epic_row" ]]; do
+    EPIC_ROWS+=("$epic_row")
+  done < <(gh issue list --repo "$REPO" --milestone "$title" --state all --label epic \
     --json number,title,state -q '.[] | "\(.number)\t\(.state)\t\(.title)"' 2>/dev/null || true)  # intentional fail-soft
 
   EPIC_NUM=""

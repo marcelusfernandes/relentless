@@ -4,6 +4,7 @@
 # deny writes whose path resolves outside the worktree root.
 set -euo pipefail
 INPUT="$(cat 2>/dev/null || true)"  # intentional: empty stdin ok
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # before the cd below
 
 is_wt=0
 [[ "${RELENTLESS_ROLE:-}" == "implementer" || -n "${RELENTLESS_WORKTREE:-}" ]] && is_wt=1
@@ -25,12 +26,15 @@ if [[ -n "$TOP" && -f "$TOP/.relentless/worktree.json" ]]; then is_wt=1; fi
 [[ -z "$FILE" ]] && exit 0
 [[ -z "$TOP" ]] && TOP="${RELENTLESS_WORKTREE:-$CWD}"
 
+# shellcheck source=../../core/scripts/lib/realpath.sh
+source "${HOOK_DIR}/../../core/scripts/lib/realpath.sh"
+
 # Resolve absolute path (best-effort, no symlink escape for v1)
 case "$FILE" in
   /*) ABS="$FILE" ;;
-  *) ABS="$(cd "$CWD" 2>/dev/null && realpath -m "$FILE" 2>/dev/null || echo "$CWD/$FILE")" ;;
+  *) ABS="$(cd "$CWD" 2>/dev/null && realpath_m "$FILE" 2>/dev/null || echo "$CWD/$FILE")" ;;
 esac
-TOP_REAL="$(realpath -m "$TOP" 2>/dev/null || echo "$TOP")"
+TOP_REAL="$(realpath_m "$TOP" 2>/dev/null || echo "$TOP")"
 
 case "$ABS" in
   "$TOP_REAL"|"$TOP_REAL"/*) exit 0 ;;

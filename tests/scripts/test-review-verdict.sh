@@ -382,7 +382,7 @@ run_merge() {
     GH_HEAD_SHA="$FULL" \
     GH_VERDICT_JSON="$GH_VERDICT_JSON" \
     "$ROOT/core/scripts/merge-if-ready.sh" --repo o/r --pr 7 --issue 9 \
-      --config "$TMP/merge-config.json" "${dry[@]}" 2>&1
+      --config "$TMP/merge-config.json" ${dry[@]+"${dry[@]}"} 2>&1
   )"
   rc=$?
   log="$(cat "$TMP/gh.log")"

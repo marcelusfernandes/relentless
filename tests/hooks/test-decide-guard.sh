@@ -420,7 +420,7 @@ cat >"$ADR_OK" <<'EOF'
 ## Decision
 Option 1 accepted.
 EOF
-base64 -w0 "$ADR_OK" >"$TMP/adr.b64"
+base64 <"$ADR_OK" >"$TMP/adr.b64"
 export GH_ADR_B64="$TMP/adr.b64"
 
 run_merge() {
@@ -582,7 +582,7 @@ See #99 for the decision.
 ## Decision
 Option 1 accepted.
 EOF
-base64 -w0 "$cited" >"$TMP/adr.b64"
+base64 <"$cited" >"$TMP/adr.b64"
 export GH_ADR_B64="$TMP/adr.b64"
 unset GH_PARENT
 export GH_ISSUE_BODY=""
@@ -643,7 +643,7 @@ assert_blocked_no_merge() {
 }
 
 # Restore the accepted ADR payload (the citation case replaced it).
-base64 -w0 "$ADR_OK" >"$TMP/adr.b64"
+base64 <"$ADR_OK" >"$TMP/adr.b64"
 export GH_ADR_B64="$TMP/adr.b64"
 unset GH_PARENT GH_COMMENT_DIR
 export GH_COMMENTS=""

@@ -18,6 +18,7 @@ jobs:
           bash tests/scripts/test-review-verdict.sh
           python3 tests/agents/test-codex-agent-briefs.py
           bash tests/scripts/test-bootstrap-upgrade.sh
+          bash tests/scripts/test-portability.sh
           bash -n hooks/scripts/*.sh
           bash -n core/scripts/*.sh
           bash -n core/scripts/lib/*.sh

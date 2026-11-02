@@ -51,17 +51,21 @@ if [[ -n "$TYPE" ]]; then
 fi
 
 has_state=0
-for l in "${EXTRA_LABELS[@]}"; do
+for l in ${EXTRA_LABELS[@]+"${EXTRA_LABELS[@]}"}; do
   [[ "$l" == state:* ]] && has_state=1
 done
 LABELS=()
 if [[ "$has_state" -eq 0 ]]; then
   LABELS+=(state:todo)
 fi
-for l in "${EXTRA_LABELS[@]}"; do
+for l in ${EXTRA_LABELS[@]+"${EXTRA_LABELS[@]}"}; do
   LABELS+=("$l")
 done
-mapfile -t LABELS < <(printf '%s\n' "${LABELS[@]}" | awk 'NF && !seen[$0]++')
+UNIQUE_LABELS=()
+while IFS= read -r l; do
+  UNIQUE_LABELS+=("$l")
+done < <(printf '%s\n' "${LABELS[@]}" | awk 'NF && !seen[$0]++')
+LABELS=(${UNIQUE_LABELS[@]+"${UNIQUE_LABELS[@]}"})
 
 MS_ARGS=()
 if [[ -n "$MILESTONE" ]]; then
@@ -81,7 +85,7 @@ for l in "${LABELS[@]}"; do
   LABEL_ARGS+=(--label "$l")
 done
 
-URL="$(gh issue create --repo "$REPO" --title "$TITLE" --body-file "$BODY_FILE" "${MS_ARGS[@]}" "${LABEL_ARGS[@]}")"
+URL="$(gh issue create --repo "$REPO" --title "$TITLE" --body-file "$BODY_FILE" ${MS_ARGS[@]+"${MS_ARGS[@]}"} "${LABEL_ARGS[@]}")"
 echo "$URL"
 
 NUM="$(basename "$URL")"

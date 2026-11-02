@@ -5,6 +5,9 @@
 # The branch check follows the command's target (git -C / --work-tree / cd),
 # not only the hook's cwd. Force-push is any spelling: --force, --force-with-lease,
 # a short option cluster that contains -f, or a +refspec.
+#
+# Runs on every Bash call, so it must also run on macOS: bash 3.2 and BSD tools
+# (no `declare -A`, `mapfile`, `;&`, or GNU-only flags).
 set -euo pipefail
 INPUT="$(cat 2>/dev/null || true)"  # intentional: empty stdin ok
 CMD=""
@@ -23,12 +26,16 @@ if printf '%s\n' "$CMD" | grep -qiE '(^|[;|&[:space:]])git[[:space:]]+clean[[:sp
   deny "git clean -f is forbidden (destructive)"
 fi
 
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../core/scripts/lib/realpath.sh
+source "${HOOK_DIR}/../../core/scripts/lib/realpath.sh"
+
 abspath() {
   local base="$1" rel="$2"
   if [[ "$rel" == /* ]]; then
-    realpath -m "$rel"
+    realpath_m "$rel"
   else
-    realpath -m "${base}/${rel}"
+    realpath_m "${base}/${rel}"
   fi
 }
 
@@ -172,15 +179,26 @@ clean_is_forced() {
   return 1
 }
 
-declare -A VBRANCH=()
-sim_cwd="$(realpath -m "$(pwd)")"
+# Branch a directory was switched to earlier in this command (checkout/switch).
+# Two parallel arrays, newest last, because bash 3.2 has no `declare -A`.
+VBRANCH_DIRS=()
+VBRANCH_NAMES=()
+sim_cwd="$(realpath_m "$(pwd)")"
+
+remember_branch() { # dir branch
+  VBRANCH_DIRS+=("$1")
+  VBRANCH_NAMES+=("$2")
+}
 
 branch_of() {
-  local dir="$1" b=""
-  if [[ -n "${VBRANCH[$dir]+x}" ]]; then
-    printf '%s' "${VBRANCH[$dir]}"
-    return 0
-  fi
+  local dir="$1" b="" j=${#VBRANCH_DIRS[@]}
+  while [[ $j -gt 0 ]]; do
+    j=$((j - 1))
+    if [[ "${VBRANCH_DIRS[$j]}" == "$dir" ]]; then
+      printf '%s' "${VBRANCH_NAMES[$j]}"
+      return 0
+    fi
+  done
   if [[ -d "$dir" ]] && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     b="$(git -C "$dir" branch --show-current 2>/dev/null || true)"  # intentional fail-soft
     printf '%s' "$b"
@@ -199,14 +217,14 @@ note_checkout() {
     fi
     if [[ "$a" == "-b" || "$a" == "-B" || "$a" == "-c" || "$a" == "-C" || "$a" == "--orphan" ]]; then
       j=$((j + 1))
-      VBRANCH["$target"]="${args[$j]:-}"
+      remember_branch "$target" "${args[$j]:-}"
       return 0
     fi
     if [[ "$a" == -* ]]; then
       j=$((j + 1))
       continue
     fi
-    VBRANCH["$target"]="$a"
+    remember_branch "$target" "$a"
     return 0
   done
   return 0
@@ -215,7 +233,10 @@ note_checkout() {
 scan_segment() {
   local seg="$1"
   local -a tokens=()
-  mapfile -t tokens < <(tokenize "$seg")
+  local tok
+  while IFS= read -r tok; do
+    tokens+=("$tok")
+  done < <(tokenize "$seg")
   [[ ${#tokens[@]} -eq 0 ]] && return 0
 
   if [[ "${tokens[0]}" == "cd" ]]; then
@@ -226,7 +247,7 @@ scan_segment() {
       dest="${tokens[1]:-}"
     fi
     if [[ -z "$dest" ]]; then
-      [[ -n "${HOME:-}" ]] && sim_cwd="$(realpath -m "$HOME")"
+      [[ -n "${HOME:-}" ]] && sim_cwd="$(realpath_m "$HOME")"
     elif [[ "$dest" != "-" ]]; then
       sim_cwd="$(abspath "$sim_cwd" "$dest")"
     fi
@@ -308,15 +329,15 @@ scan_segment() {
         deny "git clean -f is forbidden (destructive)"
       fi
       ;;
-    push)
-      if [[ ${#args[@]} -gt 0 ]] && push_is_force "${args[@]}"; then
-        deny "force-push is forbidden"
+    push|commit)
+      if [[ "$sub" == "push" ]]; then
+        if [[ ${#args[@]} -gt 0 ]] && push_is_force "${args[@]}"; then
+          deny "force-push is forbidden"
+        fi
+        if [[ ${#args[@]} -gt 0 ]] && push_targets_protected "${args[@]}"; then
+          deny "git push of main/master is forbidden"
+        fi
       fi
-      if [[ ${#args[@]} -gt 0 ]] && push_targets_protected "${args[@]}"; then
-        deny "git push of main/master is forbidden"
-      fi
-      ;&
-    commit)
       b="$(branch_of "$target")"
       if [[ "$b" == "main" || "$b" == "master" ]]; then
         deny "commit/push on ${b} is forbidden — use a feature worktree (<type>/<n>-<slug>)"

@@ -72,7 +72,10 @@ tokenize() {
   return 0
 }
 
-mapfile -t PARTS < <(tokenize "$prompt")
+PARTS=()
+while IFS= read -r part; do
+  PARTS+=("$part")
+done < <(tokenize "$prompt")
 ISSUE="${PARTS[1]:-}"
 OPTION="${PARTS[2]:-}"
 if [[ -z "$ISSUE" || -z "$OPTION" ]]; then
