@@ -120,6 +120,12 @@ CODEX_REQUIRED = {
 }
 
 DENY_NAMES = ("marcelus", "fernandes")
+# Core briefs (orchestrator, implementer) are compared as text, not by keyword.
+# Layer sentences live in agents/layers/ and are not part of this comparison.
+CORE_ROLES = ("orchestrator", "implementer")
+HUMAN_DECIDED_SENTENCE = (
+    "Never add `human:decided` and never decide for the human, even when the answer looks obvious."
+)
 STOPWORDS = {
     "about", "after", "again", "agent", "agents", "allow", "allows", "along",
     "already", "another", "apply", "around", "because", "before", "being",
@@ -289,6 +295,11 @@ def reviewer_allowed_tools(script: str) -> str:
     return match.group(1) if match else ""
 
 
+def core_markdown(md_text: str) -> str:
+    _, body = strip_frontmatter(md_text)
+    return body.strip()
+
+
 def developer_instructions(toml_text: str) -> str:
     match = re.search(
         r'developer_instructions\s*=\s*"""(.*?)"""',
@@ -312,6 +323,22 @@ def main() -> int:
             failures.append(f"{role}: missing {toml_path}")
             continue
         instructions = developer_instructions(toml_path.read_text())
+        md_text = md_path.read_text()
+        if role in CORE_ROLES:
+            core = core_markdown(md_text)
+            if not core:
+                failures.append(f"{role}: markdown core is empty")
+            elif core not in instructions:
+                failures.append(f"{role}: TOML core differs from agents/{role}.md")
+            if role == "orchestrator":
+                if HUMAN_DECIDED_SENTENCE not in md_text:
+                    failures.append("orchestrator: missing the separate Never add human:decided sentence")
+                if HUMAN_DECIDED_SENTENCE not in instructions:
+                    failures.append("orchestrator: TOML missing the separate Never add human:decided sentence")
+            for name in DENY_NAMES:
+                if name in instructions.lower() or name in md_text.lower():
+                    failures.append(f"{role}: hardcoded name {name!r}")
+            continue
         if len(instructions.strip()) < 400:
             failures.append(f"{role}: developer_instructions missing or too short")
             continue

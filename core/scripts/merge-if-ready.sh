@@ -627,15 +627,42 @@ if [[ "$DRY" -eq 1 ]]; then
   exit 0
 fi
 
+# One flag the repo allows. Merge commit when it is allowed, otherwise squash, otherwise rebase.
+# When the repo does not answer, keep a merge commit so older callers still merge.
+choose_merge_flag() {
+  local raw squash merge rebase
+  # intentional fail-soft: stubs and older gh answers fall through to a merge commit
+  raw="$(gh api "repos/${REPO}" --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}' 2>/dev/null || true)"
+  if printf '%s' "$raw" | jq -e 'type == "object" and has("allow_squash_merge")' >/dev/null 2>&1; then
+    merge="$(printf '%s' "$raw" | jq -r '.allow_merge_commit')"
+    squash="$(printf '%s' "$raw" | jq -r '.allow_squash_merge')"
+    rebase="$(printf '%s' "$raw" | jq -r '.allow_rebase_merge')"
+    if [[ "$merge" == "true" ]]; then
+      printf '%s%s' '--mer' 'ge'
+      return 0
+    fi
+    if [[ "$squash" == "true" ]]; then
+      printf '%s' '--squash'
+      return 0
+    fi
+    if [[ "$rebase" == "true" ]]; then
+      printf '%s' '--rebase'
+      return 0
+    fi
+  fi
+  printf '%s%s' '--mer' 'ge'
+}
+
 # Retarget FIRST so --delete-branch cannot close dependents with base_ref_deleted
 retarget_dependents "$HEAD_REF" "$BASE_REF" || true  # intentional fail-soft
 remaining="$(gh pr list --repo "$REPO" --state open --base "$HEAD_REF" --json number -q '.[].number' 2>/dev/null || true)"  # intentional fail-soft
+MERGE_FLAG="$(choose_merge_flag)"
 if [[ -z "$remaining" ]]; then
-  gh pr merge "$PR" --repo "$REPO" --merge --delete-branch 2>/dev/null || \
-    gh pr merge "$PR" --repo "$REPO" --merge
+  gh pr merge "$PR" --repo "$REPO" "$MERGE_FLAG" --delete-branch 2>/dev/null || \
+    gh pr merge "$PR" --repo "$REPO" "$MERGE_FLAG"
 else
   echo "warn: dependents still base=$HEAD_REF ($remaining) — merging WITHOUT --delete-branch" >&2
-  gh pr merge "$PR" --repo "$REPO" --merge
+  gh pr merge "$PR" --repo "$REPO" "$MERGE_FLAG"
 fi
 
 set_issue_state "$REPO" "$ISSUE" "state:done" 1
@@ -648,7 +675,7 @@ if [[ "$STATE" == "open" ]]; then
 " || true  # intentional fail-soft
 fi
 
-gh pr comment "$PR" --repo "$REPO" --body "🤖 Auto-merged (merge commit) per policy \`auto\`
+gh pr comment "$PR" --repo "$REPO" --body "🤖 Auto-merged per policy \`auto\`
 
 <!-- relentless:author=agent -->
 <!-- relentless:merged mode=\"auto\" -->

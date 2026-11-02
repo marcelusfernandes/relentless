@@ -56,6 +56,42 @@
           "type": "boolean",
           "default": true
         }
+      },
+      "description": "Who merges. Not a layer switch. Layer switches live under layers."
+    },
+    "base": {
+      "type": "string",
+      "description": "Repo default branch, read once at bootstrap. Issue branches start here."
+    },
+    "merge_methods": {
+      "type": "object",
+      "description": "Merge methods the repo allowed when bootstrap read it. Editable.",
+      "properties": {
+        "merge": {
+          "type": "boolean"
+        },
+        "squash": {
+          "type": "boolean"
+        },
+        "rebase": {
+          "type": "boolean"
+        }
+      }
+    },
+    "layers": {
+      "type": "object",
+      "description": "Optional layers. Missing or false stays off. A fresh bootstrap writes every switch false. Upgrade defaults for an existing config are not this schema.",
+      "additionalProperties": false,
+      "properties": {
+        "merge": { "type": "boolean" },
+        "review": { "type": "boolean" },
+        "qa": { "type": "boolean" },
+        "worktrees": { "type": "boolean" },
+        "decisions": { "type": "boolean" },
+        "templates": { "type": "boolean" },
+        "ci": { "type": "boolean" },
+        "githooks": { "type": "boolean" },
+        "docs": { "type": "boolean" }
       }
     },
     "rulesets": {
@@ -102,13 +138,13 @@
         },
         "test": {
           "type": "string",
-          "description": "Project test command (also written into relentless-ci.yml). merge-if-ready runs this on the PR head when Actions quota skips CI. Empty falls back to npm test when package.json scripts.test is set."
+          "description": "Test command read from the repo's own CI. merge-if-ready runs this on the PR head when Actions quota skips CI."
         },
         "build": {
           "type": "string"
         }
       },
-      "description": "Commands Relentless wrote into relentless-ci.yml"
+      "description": "Commands read once from the repo. A fresh bootstrap fills test from the repo's workflow."
     }
   }
 }

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# worktree-create.sh — one writer per git worktree from fresh origin/main.
+# worktree-create.sh — one writer per git worktree from the repo base branch.
 # Branch naming: <type>/<issue>-<slug>  (e.g. feat/12-add-login)
-# Remote push of a new ref is the lock (fails if branch already exists).
+# The branch is created with `gh issue develop` so it shows on the issue.
+# If that command fails, this script exits with that error. It does not
+# fall back to `git worktree add -b`.
 #
 # Usage:
 #   worktree-create.sh --repo OWNER/NAME --issue N --slug SLUG [--type feat] \
-#     [--workdir PATH] [--parent PATH] [--base main] [--dry-run]
+#     [--workdir PATH] [--parent PATH] [--base BRANCH] [--dry-run]
 #
 # Creates: <parent>/<repo-basename>-wt-<N>  (or --path) checked out on the branch.
 set -euo pipefail
@@ -13,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
-REPO="" ISSUE="" SLUG="" TYPE="feat" WORKDIR="." PARENT="" BASE="main" PATH_OUT="" DRY=0 NO_PUSH=0
+REPO="" ISSUE="" SLUG="" TYPE="feat" WORKDIR="." PARENT="" BASE="" BASE_EXPLICIT=0 PATH_OUT="" DRY=0 NO_PUSH=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO="${2:-}"; shift 2 ;;
@@ -23,7 +25,7 @@ while [[ $# -gt 0 ]]; do
     --workdir) WORKDIR="${2:-}"; shift 2 ;;
     --parent) PARENT="${2:-}"; shift 2 ;;
     --path) PATH_OUT="${2:-}"; shift 2 ;;
-    --base) BASE="${2:-}"; shift 2 ;;
+    --base) BASE="${2:-}"; BASE_EXPLICIT=1; shift 2 ;;
     --no-push) NO_PUSH=1; shift ;;
     --dry-run) DRY=1; shift ;;
     -h|--help)
@@ -43,38 +45,42 @@ PARENT="${PARENT:-$(dirname "$WORKDIR")}"
 REPO_BASE="$(basename "$REPO")"
 PATH_OUT="${PATH_OUT:-${PARENT}/${REPO_BASE}-wt-${ISSUE}}"
 
+if [[ "$BASE_EXPLICIT" -eq 0 ]]; then
+  if [[ -f "${WORKDIR}/.relentless/config.json" ]]; then
+    BASE="$(jq -r '.base // empty' "${WORKDIR}/.relentless/config.json" 2>/dev/null || true)"  # intentional fail-soft: a broken config falls through to the repo
+  fi
+  if [[ -z "$BASE" ]]; then
+    BASE="$(gh repo view "$REPO" --json defaultBranchRef -q '.defaultBranchRef.name // empty' || true)"  # intentional fail-soft: the error is reported below
+  fi
+  if [[ -z "$BASE" ]]; then
+    echo "error: could not resolve the base branch from .relentless/config.json or the repo" >&2
+    exit 1
+  fi
+fi
+
 echo "plan: worktree at $PATH_OUT"
-echo "plan: branch $BRANCH from origin/${BASE} (never from another feature branch)"
+echo "plan: branch $BRANCH from origin/${BASE} (the repo base, never another feature branch)"
 
 if [[ "$DRY" -eq 1 ]]; then
-  echo "dry-run: git fetch origin && git worktree add -b $BRANCH $PATH_OUT origin/${BASE}"
-  echo "dry-run: git -C $PATH_OUT push -u origin HEAD  # lock"
+  echo "dry-run: gh issue develop $ISSUE --repo $REPO --name $BRANCH --base $BASE"
+  echo "dry-run: git fetch origin ${BRANCH} && git worktree add $PATH_OUT $BRANCH"
   exit 0
 fi
 
+# bash 3.2 does not leave the shell on a failing command inside this subshell
+# under set -e, so each step exits itself and the parent exits with that status.
 (
-  cd "$WORKDIR"
-  git fetch origin "$BASE"
-  # Refuse if path exists
+  cd "$WORKDIR" || exit 1
+  git fetch origin "$BASE" || exit $?
   if [[ -e "$PATH_OUT" ]]; then
     echo "error: path exists: $PATH_OUT — remove or pass --path" >&2
     exit 1
   fi
-  # Prefer gh issue develop when available (links Development panel), else worktree add
-  if command -v gh >/dev/null && gh issue develop --help >/dev/null 2>&1; then
-    # Create remote branch linked to issue from base, then add local worktree
-    if gh issue develop "$ISSUE" --repo "$REPO" --base "$BASE" --name "$BRANCH" 2>/dev/null; then
-      git fetch origin "$BRANCH"
-      git worktree add "$PATH_OUT" "$BRANCH"
-    else
-      # Branch may already exist (lock held) or develop unsupported — fall through
-      echo "warn: gh issue develop failed; trying local worktree + push lock" >&2
-      git worktree add -b "$BRANCH" "$PATH_OUT" "origin/${BASE}"
-    fi
-  else
-    git worktree add -b "$BRANCH" "$PATH_OUT" "origin/${BASE}"
-  fi
-)
+  # Link the branch to the issue. No other creation path: a failure stops here.
+  gh issue develop "$ISSUE" --repo "$REPO" --base "$BASE" --name "$BRANCH" || exit $?
+  git fetch origin "$BRANCH" || exit $?
+  git worktree add "$PATH_OUT" "$BRANCH" || exit $?
+) || exit $?
 
 # Verify not based on another feature branch tip accidentally
 (

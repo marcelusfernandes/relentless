@@ -26,19 +26,9 @@
       "description": "Completed"
     },
     {
-      "name": "merge:auto",
-      "color": "C2E0C6",
-      "description": "Override: allow agent auto-merge for this issue"
-    },
-    {
-      "name": "merge:human",
-      "color": "F9D0C4",
-      "description": "Override: require human merge for this issue"
-    },
-    {
       "name": "human:pending",
       "color": "E4E669",
-      "description": "Awaiting human decision; never remove bare \u2014 flip to human:decided"
+      "description": "Awaiting human decision; never remove bare — flip to human:decided"
     },
     {
       "name": "human:decided",
@@ -46,89 +36,9 @@
       "description": "Human decision recorded; clears pending"
     },
     {
-      "name": "review:approved",
-      "color": "0E8A16",
-      "description": "Reviewer approved"
-    },
-    {
-      "name": "bug",
-      "color": "D73A4A",
-      "description": "Something is not working"
-    },
-    {
-      "name": "enhancement",
-      "color": "A2EEEF",
-      "description": "New feature or request"
-    },
-    {
-      "name": "documentation",
-      "color": "0075CA",
-      "description": "Improvements or additions to documentation"
-    },
-    {
-      "name": "question",
-      "color": "D876E3",
-      "description": "Further information is requested"
-    },
-    {
-      "name": "duplicate",
-      "color": "CFD3D7",
-      "description": "This issue or pull request already exists"
-    },
-    {
-      "name": "wontfix",
-      "color": "FFFFFF",
-      "description": "This will not be worked on"
-    },
-    {
-      "name": "good first issue",
-      "color": "7057FF",
-      "description": "Good for newcomers"
-    },
-    {
-      "name": "help wanted",
-      "color": "008672",
-      "description": "Extra attention is needed"
-    },
-    {
-      "name": "invalid",
-      "color": "E4E669",
-      "description": "This does not seem right"
-    },
-    {
       "name": "epic",
       "color": "3E4B9E",
       "description": "Parent that groups sub-issues in a milestone; closes when all children close"
-    },
-    {
-      "name": "investigation",
-      "color": "FBCA04",
-      "description": "Requires skeptical validation before permanent implementation; outcome is a decision or follow-up..."
-    },
-    {
-      "name": "severity:critical",
-      "color": "B60205",
-      "description": "Critical review finding severity; does not set roadmap order"
-    },
-    {
-      "name": "severity:high",
-      "color": "D93F0B",
-      "description": "High review finding severity; does not set roadmap order"
-    },
-    {
-      "name": "severity:medium",
-      "color": "E99695",
-      "description": "Medium review finding severity; does not set roadmap order"
-    },
-    {
-      "name": "orphan:ok",
-      "color": "EDEDED",
-      "description": "Explicit exception: issue may sit in a milestone without being a sub-issue of the parent epic"
-    },
-    {
-      "name": "ci:local",
-      "color": "FBCA04",
-      "description": "Local checks passed while GitHub Actions quota was unavailable; applied only by merge-if-ready"
     }
   ]
 }

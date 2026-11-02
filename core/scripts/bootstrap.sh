@@ -1,62 +1,47 @@
 #!/usr/bin/env bash
-# bootstrap.sh — prepare a consumer repo for Relentless: labels, stack-aware CI,
-# idempotent AGENTS/CLAUDE blocks, issue forms, config with checks.
-# Default dry-run. Prefer the setup skill / /relentless:setup for interactive use.
+# bootstrap.sh — add what a consumer repo is missing: config, the docs block,
+# and core labels. Layers (CI, templates, githooks, decisions, review, qa, docs)
+# run only when layers.<name> is true. A fresh bootstrap writes every switch false.
+# Default dry-run. An existing config, label, template, workflow, or .codex file
+# is never edited.
 set -euo pipefail
 
 REPO="" APPLY=0 CONFIG="" WORKDIR="" SEED_FILES=1
 MERGE_DEFAULT="" DECIDER_NAME="" DECIDER_GITHUB=""
 HARNESS="both"
 INIT_EMPTY=1
-MERGE_DEFAULT_EXPLICIT=0
 BRANCH_PROTECTION=0
 UPGRADE=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
-# shellcheck source=lib/detect-stack.sh
-source "${SCRIPT_DIR}/lib/detect-stack.sh"
-# shellcheck source=lib/render-ci.sh
-source "${SCRIPT_DIR}/lib/render-ci.sh"
 # shellcheck source=lib/seed-relentless-docs.sh
 source "${SCRIPT_DIR}/lib/seed-relentless-docs.sh"
 LABELS_FILE="${SCRIPT_DIR}/../labels/labels.json"
 TEMPLATES_ROOT="${SCRIPT_DIR}/../templates"
-SCHEMA_EXAMPLE="${SCRIPT_DIR}/../schemas/config.example.json"
 
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") --repo OWNER/NAME [options]
 
   --repo OWNER/NAME
-  --workdir PATH           Local checkout (needed to seed on disk / initial commit)
+  --workdir PATH           Local checkout (needed to seed on disk)
   --apply                  Perform changes (default: dry-run)
-  --config PATH            Config to validate
+  --config PATH            Config to read. An existing file is not rewritten.
   --no-seed-files          Skip seeding
   --check-scopes           Only check gh token scopes and exit
-  --merge-default auto|human   Set merge.default (if stack unknown / no test and
-                           you omit this, defaults to human with a warning)
+  --merge-default auto|human   merge.default on a new config
   --decider NAME           Set decider.name (non-interactive)
   --decider-github LOGIN   Set decider.github (default: gh api user login)
   --no-init-empty          Do not create initial commit on empty repos
   --harness claude|codex|both
-                           Which agent harness this repo uses (default: both).
-  --branch-protection      Opt in to GitHub branch protection on the default
-                           branch. Off unless this flag is passed. Fail-soft.
-  --upgrade                Refresh Codex agent TOMLs and docs blocks that
-                           Relentless owns. Does not rewrite issue forms,
-                           labels, or existing config values. Same add-only
-                           rule as plain --apply.
+  --branch-protection      Opt in to GitHub branch protection. Off unless passed.
+  --upgrade                Kept for compatibility. Does not rewrite existing files.
 
-Detects stack under --workdir. Writes .github/workflows/relentless-ci.yml
-only on the first bootstrap (when config.json does not exist yet); a file
-removed later stays absent. Upserts <!-- relentless:start --> blocks in
-AGENTS.md / CLAUDE.md, seeds missing issue forms including epic + config.yml
-(blank_issues_enabled: false), and fills missing config keys. Existing
-stack, package_manager, checks, and merge.default are left as they are.
-Installs .relentless/githooks (pre-commit, pre-push) via core.hooksPath, or
-chains an existing hooksPath / husky without replacing it. GitHub branch
-protection stays off unless --branch-protection.
+A new config records the repo default branch (base), the merge methods the
+repo allows, and checks.test from the repo's own workflow. layers.* start
+false. CI, templates, githooks, and decisions run only when that layer is
+already true in an existing config.
 USAGE
 }
 
@@ -69,7 +54,7 @@ while [[ $# -gt 0 ]]; do
     --config) CONFIG="${2:-}"; shift 2 ;;
     --no-seed-files) SEED_FILES=0; shift ;;
     --check-scopes) CHECK_SCOPES_ONLY=1; shift ;;
-    --merge-default) MERGE_DEFAULT="${2:-}"; MERGE_DEFAULT_EXPLICIT=1; shift 2 ;;
+    --merge-default) MERGE_DEFAULT="${2:-}"; shift 2 ;;
     --decider) DECIDER_NAME="${2:-}"; shift 2 ;;
     --decider-github) DECIDER_GITHUB="${2:-}"; shift 2 ;;
     --no-init-empty) INIT_EMPTY=0; shift ;;
@@ -97,27 +82,127 @@ case "$HARNESS" in
   claude|codex|both) ;;
   *) echo "error: --harness must be claude|codex|both" >&2; exit 2 ;;
 esac
+if [[ -z "$MERGE_DEFAULT" ]]; then
+  MERGE_DEFAULT="human"
+fi
 
 MODE="DRY-RUN"; [[ "$APPLY" -eq 1 ]] && MODE="APPLY"
 UPGRADE_LABEL=""; [[ "$UPGRADE" -eq 1 ]] && UPGRADE_LABEL=" upgrade"
 echo "== Relentless bootstrap ($MODE$UPGRADE_LABEL) on $REPO (harness=$HARNESS) =="
 
-# Captured before any write. relentless-ci.yml is created only when this is 0.
+if [[ -z "$CONFIG" && -n "$WORKDIR" && -f "${WORKDIR}/.relentless/config.json" ]]; then
+  CONFIG="${WORKDIR}/.relentless/config.json"
+fi
+
 CONFIG_EXISTED=0
-if [[ -n "$WORKDIR" && -f "${WORKDIR}/.relentless/config.json" ]]; then
+if [[ -n "$CONFIG" && -f "$CONFIG" ]]; then
   CONFIG_EXISTED=1
 fi
+
+# True only when an existing config sets layers.<name> to true.
+# A missing config, a missing key, or false stays off. Upgrade defaults are later.
+layer_on() {
+  local name="$1" cfg="" val
+  if [[ -n "$CONFIG" && -f "$CONFIG" ]]; then
+    cfg="$CONFIG"
+  elif [[ -n "$WORKDIR" && -f "${WORKDIR}/.relentless/config.json" ]]; then
+    cfg="${WORKDIR}/.relentless/config.json"
+  fi
+  [[ -n "$cfg" ]] || return 1
+  val="$(jq -r --arg n "$name" '.layers[$n] // false' "$cfg" 2>/dev/null || echo false)"
+  [[ "$val" == "true" ]]
+}
+
+# Single-line `run:` steps. Prefer a command that mentions test.
+read_repo_test_command() {
+  local root="$1" f line cmd picked=""
+  [[ -n "$root" && -d "$root/.github/workflows" ]] || return 0
+  for f in "$root"/.github/workflows/*; do
+    [[ -f "$f" ]] || continue
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      case "$line" in
+        *run:*)
+          cmd="${line#*run:}"
+          cmd="${cmd#"${cmd%%[![:space:]]*}"}"
+          cmd="${cmd%"${cmd##*[![:space:]]}"}"
+          [[ -n "$cmd" && "$cmd" != "|" ]] || continue
+          if [[ -z "$picked" ]]; then
+            picked="$cmd"
+          fi
+          if printf '%s\n' "$cmd" | grep -q 'test'; then
+            printf '%s\n' "$cmd"
+            return 0
+          fi
+          ;;
+      esac
+    done <"$f"
+  done
+  printf '%s\n' "$picked"
+}
+
+read_merge_methods() {
+  local raw
+  # intentional fail-soft: a repo that does not answer still gets a config
+  raw="$(gh api "repos/${REPO}" --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}' 2>/dev/null || true)"
+  if printf '%s' "$raw" | jq -e 'type == "object" and has("allow_squash_merge")' >/dev/null 2>&1; then
+    printf '%s' "$raw" | jq -c '{merge: .allow_merge_commit, squash: .allow_squash_merge, rebase: .allow_rebase_merge}'
+  fi
+}
+
+write_fresh_config() {
+  local dest="$1" login base test_cmd methods
+  mkdir -p "$(dirname "$dest")"
+  login="${DECIDER_GITHUB:-$(gh api user -q .login 2>/dev/null || echo "")}"
+  # intentional fail-soft: record an empty base rather than inventing one
+  base="$(gh repo view "$REPO" --json defaultBranchRef -q '.defaultBranchRef.name // empty' 2>/dev/null || true)"
+  test_cmd="$(read_repo_test_command "$WORKDIR")"
+  methods="$(read_merge_methods || true)"
+  if [[ -n "$methods" ]]; then
+    jq -n \
+      --arg name "${DECIDER_NAME:-$login}" \
+      --arg gh "$login" \
+      --arg merge "$MERGE_DEFAULT" \
+      --arg base "$base" \
+      --arg test "$test_cmd" \
+      --argjson methods "$methods" \
+      '{
+        decider: {name: $name, github: $gh},
+        workers: {default: {github: $gh}},
+        merge: {default: $merge, allow_issue_override: true},
+        base: $base,
+        merge_methods: $methods,
+        checks: {test: $test},
+        layers: {
+          merge: false, review: false, qa: false, worktrees: false,
+          decisions: false, templates: false, ci: false, githooks: false, docs: false
+        }
+      }' >"$dest"
+  else
+    jq -n \
+      --arg name "${DECIDER_NAME:-$login}" \
+      --arg gh "$login" \
+      --arg merge "$MERGE_DEFAULT" \
+      --arg base "$base" \
+      --arg test "$test_cmd" \
+      '{
+        decider: {name: $name, github: $gh},
+        workers: {default: {github: $gh}},
+        merge: {default: $merge, allow_issue_override: true},
+        base: $base,
+        checks: {test: $test},
+        layers: {
+          merge: false, review: false, qa: false, worktrees: false,
+          decisions: false, templates: false, ci: false, githooks: false, docs: false
+        }
+      }' >"$dest"
+  fi
+  echo "config written: $dest (base=$(jq -r '.base // empty' "$dest"), merge.default=$(jq -r .merge.default "$dest"), checks.test=$(jq -r '.checks.test // empty' "$dest"))"
+}
 
 SCOPE_OK=0
 if check_gh_workflow_scope; then SCOPE_OK=1
 else
-  # Workflow scope is required only when this run would create the workflow
-  # file (first bootstrap). A later --apply does not push workflow YAML.
-  if [[ "$APPLY" -eq 1 && "$SEED_FILES" -eq 1 && "$CONFIG_EXISTED" -eq 0 ]]; then
-    echo "error: refusing --apply with seed files while 'workflow' scope is missing." >&2
-    exit 1
-  fi
-  echo "warn: continuing without workflow scope (CI seed skipped on apply)" >&2
+  echo "warn: continuing without workflow scope" >&2
 fi
 
 IS_EMPTY="$(gh repo view "$REPO" --json isEmpty -q .isEmpty 2>/dev/null || echo false)"
@@ -125,181 +210,27 @@ DEFAULT_BRANCH="$(gh repo view "$REPO" --json defaultBranchRef -q '.defaultBranc
 
 if [[ "$IS_EMPTY" == "true" || -z "$DEFAULT_BRANCH" ]]; then
   echo "empty-repo: no default branch yet"
-  if [[ "$INIT_EMPTY" -eq 1 ]]; then
-    echo "plan: create initial README commit on main"
-    if [[ "$APPLY" -eq 1 ]]; then
-      if [[ -z "$WORKDIR" ]]; then
-        echo "error: --workdir required to create initial commit on empty repo" >&2
-        exit 1
+  if [[ "$INIT_EMPTY" -eq 1 && "$APPLY" -eq 1 && -n "$WORKDIR" ]]; then
+    echo "plan: create initial README commit"
+    mkdir -p "$WORKDIR"
+    (
+      cd "$WORKDIR"
+      if [[ ! -d .git ]]; then git init -b main; git remote add origin "https://github.com/${REPO}.git" 2>/dev/null || true; fi  # intentional fail-soft
+      if [[ ! -f README.md ]]; then
+        printf '# %s\n\nBootstrapped by Relentless.\n' "${REPO##*/}" > README.md
       fi
-      mkdir -p "$WORKDIR"
-      if [[ ! -d "$WORKDIR/.git" ]]; then
-        git clone "https://github.com/${REPO}.git" "$WORKDIR" 2>/dev/null || true  # intentional fail-soft
+      git config user.email >/dev/null 2>&1 || git config user.email "relentless-bot@users.noreply.github.com"
+      git config user.name >/dev/null 2>&1 || git config user.name "Relentless Bootstrap"
+      git add README.md
+      if git commit -m "chore: initial commit" 2>/dev/null; then
+        git push -u origin HEAD
+        echo "empty-repo: pushed initial commit"
       fi
-      (
-        cd "$WORKDIR"
-        if [[ ! -d .git ]]; then git init -b main; git remote add origin "https://github.com/${REPO}.git" 2>/dev/null || true; fi  # intentional fail-soft
-        if [[ ! -f README.md ]]; then
-          printf '# %s\n\nBootstrapped by Relentless.\n' "${REPO##*/}" > README.md
-        fi
-        if [[ ! -f .gitignore ]]; then
-          cp "${TEMPLATES_ROOT}/gitignore" .gitignore
-        fi
-        git config user.email >/dev/null 2>&1 || git config user.email "relentless-bot@users.noreply.github.com"
-        git config user.name >/dev/null 2>&1 || git config user.name "Relentless Bootstrap"
-        git add README.md .gitignore
-        if git commit -m "chore: initial commit" 2>/dev/null; then
-          git push -u origin HEAD:main
-          echo "empty-repo: pushed initial commit"
-        else
-          git push -u origin HEAD:main 2>/dev/null || true  # intentional fail-soft
-        fi
-      )
-    fi
-  else
+    )
+  elif [[ "$INIT_EMPTY" -eq 0 ]]; then
     echo "warn: --no-init-empty; create an initial commit before milestones"
   fi
 fi
-
-# --- Stack detection ---
-STACK="unknown"; PM=""; INSTALL=""; LINT=""; TYPECHECK=""; TEST=""; BUILD=""; HAS_TEST=0
-if [[ -n "$WORKDIR" && -d "$WORKDIR" ]]; then
-  detect_stack "$WORKDIR"
-  echo "stack: $STACK (pm=${PM:-n/a} has_test=$HAS_TEST)"
-  echo "  install: ${INSTALL:-"(none)"}"
-  echo "  lint: ${LINT:-"(none)"}"
-  echo "  typecheck: ${TYPECHECK:-"(none)"}"
-  echo "  test: ${TEST:-"(none)"}"
-  echo "  build: ${BUILD:-"(none)"}"
-else
-  echo "stack: (no --workdir — skip detection; CI will FAIL-closed if seeded without workdir apply)"
-fi
-
-# Safe merge default when checks are weak
-if [[ "$HAS_TEST" -eq 0 || "$STACK" == "unknown" ]]; then
-  if [[ "$MERGE_DEFAULT_EXPLICIT" -eq 0 ]]; then
-    MERGE_DEFAULT="human"
-    echo "warn: stack unknown or no test command — forcing merge.default=human"
-    echo "warn: pass --merge-default auto explicitly only if you accept merge-if-ready risk"
-  elif [[ "$MERGE_DEFAULT" == "auto" ]]; then
-    echo "warn: merge.default=auto requested but no reliable test detected — CI will FAIL until configured"
-  fi
-fi
-# If still empty, leave example default from schema (human)
-if [[ -z "$MERGE_DEFAULT" ]]; then
-  MERGE_DEFAULT="human"
-fi
-
-if [[ -z "$CONFIG" && -n "$WORKDIR" && -f "${WORKDIR}/.relentless/config.json" ]]; then
-  CONFIG="${WORKDIR}/.relentless/config.json"
-fi
-
-write_or_patch_config() {
-  local dest="$1"
-  mkdir -p "$(dirname "$dest")"
-  local existed=0
-  if [[ -f "$dest" ]]; then
-    existed=1
-  else
-    cp "$SCHEMA_EXAMPLE" "$dest"
-  fi
-  local login
-  login="${DECIDER_GITHUB:-$(gh api user -q .login 2>/dev/null || echo "")}"
-  local name="${DECIDER_NAME:-}"
-  local merge="${MERGE_DEFAULT:-}"
-  local tmp
-  tmp="$(mktemp)"
-  # A new file takes the detected stack and checks. An existing file keeps
-  # every value it already has, including custom keys; only missing keys
-  # are filled. stack, package_manager, checks, and merge.default are not
-  # overwritten. --branch-protection still opts in when the flag is passed.
-  jq --arg name "$name" --arg gh "$login" --arg merge "$merge" \
-    --arg stack "$STACK" --arg pm "$PM" \
-    --arg install "$INSTALL" --arg lint "$LINT" --arg typecheck "$TYPECHECK" \
-    --arg test "$TEST" --arg build "$BUILD" \
-    --argjson bp "${BRANCH_PROTECTION:-0}" \
-    --argjson existed "$existed" \
-    --slurpfile example "$SCHEMA_EXAMPLE" \
-    '
-    # Arguments are filters, so bind them before reduce (inside reduce, "." is the accumulator).
-    def fill(d; c):
-      d as $d | c as $c |
-      if ($d|type) == "object" and ($c|type) == "object" then
-        reduce (($d + $c) | keys_unsorted[]) as $k
-          ({};
-            .[$k] = (
-              if (($c|has($k)) and ($d|has($k))
-                  and (($d[$k]|type) == "object") and (($c[$k]|type) == "object"))
-              then fill($d[$k]; $c[$k])
-              elif ($c|has($k)) then $c[$k]
-              else $d[$k] end
-            ))
-      else $c end;
-    def detected:
-      if ($name | length) > 0 then .decider.name = $name else . end
-      | if ($gh | length) > 0 then .decider.github = $gh | .workers.default.github = $gh else . end
-      | if ($merge | length) > 0 then .merge.default = $merge else . end
-      | if $bp == 1 then .rulesets = ((.rulesets // {}) + {apply: true}) else . end
-      | .stack = $stack
-      | .package_manager = (if ($pm | length) > 0 then $pm else null end)
-      | .checks = {
-          install: $install,
-          lint: $lint,
-          typecheck: $typecheck,
-          test: $test,
-          build: $build
-        };
-    if $existed == 0 then
-      detected
-    else
-      . as $cur
-      | fill(($example[0] | detected); $cur)
-      | if $bp == 1 then .rulesets = ((.rulesets // {}) + {apply: true}) else . end
-    end
-    ' "$dest" >"$tmp" && mv "$tmp" "$dest"
-  if [[ "$existed" -eq 1 ]]; then
-    echo "config written: $dest (kept existing stack, package_manager, checks, merge.default; merge.default=$(jq -r .merge.default "$dest"), stack=$(jq -r .stack "$dest"), decider=$(jq -r .decider.name "$dest"))"
-  else
-    echo "config written: $dest (merge.default=$(jq -r .merge.default "$dest"), stack=$(jq -r .stack "$dest"), decider=$(jq -r .decider.name "$dest"))"
-  fi
-}
-
-if [[ -n "$CONFIG" && -f "$CONFIG" ]]; then
-  echo "config: found $CONFIG"
-  if ! jq -e '.decider.name and .decider.github and .merge.default' "$CONFIG" >/dev/null 2>&1; then
-    echo "warn: config missing required fields" >&2
-  else
-    echo "config: basic schema ok"
-  fi
-  if ! jq -e '.workers and (.workers | type == "object") and (.workers | length > 0)' "$CONFIG" >/dev/null 2>&1; then
-    echo "warn: config.workers missing or empty" >&2
-  else
-    echo "config: workers ok"
-  fi
-  if [[ "$APPLY" -eq 1 ]]; then
-    write_or_patch_config "$CONFIG"
-  else
-    echo "plan: would patch config with merge.default=${MERGE_DEFAULT} stack=${STACK} checks=…"
-  fi
-else
-  echo "config: none yet"
-  echo "plan: seed config with merge.default=${MERGE_DEFAULT} decider=${DECIDER_NAME:-'(from gh)'} stack=${STACK}"
-fi
-
-EXISTING="$(gh label list --repo "$REPO" --limit 200 --json name -q '.[].name' 2>/dev/null || true)"  # intentional fail-soft
-while IFS= read -r row; do
-  name="$(jq -r '.name' <<<"$row")"
-  color="$(jq -r '.color' <<<"$row")"
-  desc="$(jq -r '.description' <<<"$row")"
-  if grep -Fxq "$name" <<<"$EXISTING"; then
-    echo "label exists: $name"
-  else
-    echo "label create: $name"
-    if [[ "$APPLY" -eq 1 ]]; then
-      gh label create "$name" --repo "$REPO" --color "$color" --description "$desc" >/dev/null || true  # intentional fail-soft
-    fi
-  fi
-done < <(jq -c '.labels[]' "$LABELS_FILE")
 
 seed_copy() {
   local src="$1" dest_rel="$2"
@@ -317,244 +248,147 @@ seed_copy() {
   fi
 }
 
-# Always overwrite Relentless-owned template files (idempotent refresh)
-seed_write() {
-  local src="$1" dest_rel="$2"
-  if [[ -z "$WORKDIR" ]]; then
-    echo "seed (needs --workdir): $dest_rel"; return 0
-  fi
-  echo "seed write: $dest_rel (owned)"
-  if [[ "$APPLY" -eq 1 ]]; then
-    mkdir -p "$(dirname "${WORKDIR}/${dest_rel}")"
-    cp "$src" "${WORKDIR}/${dest_rel}"
-  fi
-}
+if [[ "$SEED_FILES" -eq 0 ]]; then
+  echo "seed: skipped (--no-seed-files)"
+  echo "== done ($MODE) =="
+  exit 0
+fi
 
-if [[ "$SEED_FILES" -eq 1 ]]; then
-  echo "-- seed plan --"
-  if [[ -z "$WORKDIR" ]]; then
-    echo "seed: no --workdir; listing paths only"
-  fi
+echo "-- seed plan --"
 
-  if [[ -n "$WORKDIR" ]]; then
-    dest_cfg="${WORKDIR}/.relentless/config.json"
-    if [[ "$APPLY" -eq 1 ]]; then
-      write_or_patch_config "$dest_cfg"
-    else
-      echo "seed write: .relentless/config.json (merge=${MERGE_DEFAULT} stack=${STACK})"
-    fi
+if [[ -n "$WORKDIR" ]]; then
+  dest_cfg="${WORKDIR}/.relentless/config.json"
+  if [[ -f "$dest_cfg" || "$CONFIG_EXISTED" -eq 1 ]]; then
+    echo "config: kept existing ${CONFIG:-$dest_cfg}"
+  elif [[ "$APPLY" -eq 1 ]]; then
+    write_fresh_config "$dest_cfg"
+    CONFIG="$dest_cfg"
   else
-    echo "seed (needs --workdir): .relentless/config.json"
+    echo "plan: would write .relentless/config.json (base from the repo, layers off, merge.default=${MERGE_DEFAULT})"
   fi
+else
+  echo "seed (needs --workdir): .relentless/config.json"
+fi
 
-  # Issue forms are created when missing and left alone when present.
+# Core labels only. Create the missing ones. Never edit an existing label.
+EXISTING="$(gh label list --repo "$REPO" --limit 200 --json name -q '.[].name' 2>/dev/null || true)"  # intentional fail-soft
+while IFS= read -r row; do
+  name="$(jq -r '.name' <<<"$row")"
+  color="$(jq -r '.color' <<<"$row")"
+  desc="$(jq -r '.description' <<<"$row")"
+  if grep -Fxq "$name" <<<"$EXISTING"; then
+    echo "label exists: $name"
+  else
+    echo "label create: $name"
+    if [[ "$APPLY" -eq 1 ]]; then
+      gh label create "$name" --repo "$REPO" --color "$color" --description "$desc" >/dev/null || true  # intentional fail-soft: label may appear between list and create
+    fi
+  fi
+done < <(jq -c '.labels[]' "$LABELS_FILE")
+
+if [[ -n "$WORKDIR" ]]; then
+  test_for_docs="$(read_repo_test_command "$WORKDIR")"
+  agents_block="$(render_relentless_agents_block "$MERGE_DEFAULT" "$HARNESS" "repo" "" "" "" "$test_for_docs" "")"
+  claude_block="$(render_relentless_claude_block "$MERGE_DEFAULT" "$HARNESS" "repo" "$test_for_docs")"
+  if [[ "$APPLY" -eq 1 ]]; then
+    upsert_relentless_block "${WORKDIR}/AGENTS.md" "$agents_block"
+    upsert_relentless_block "${WORKDIR}/CLAUDE.md" "$claude_block"
+  else
+    echo "seed upsert: AGENTS.md (relentless block)"
+    echo "seed upsert: CLAUDE.md (relentless block)"
+  fi
+else
+  echo "seed (needs --workdir): AGENTS.md / CLAUDE.md relentless blocks"
+fi
+
+if layer_on templates; then
   seed_copy "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/relentless.yml" ".github/ISSUE_TEMPLATE/relentless.yml"
   seed_copy "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/investigation.yml" ".github/ISSUE_TEMPLATE/investigation.yml"
   seed_copy "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/epic.yml" ".github/ISSUE_TEMPLATE/epic.yml"
   seed_copy "${TEMPLATES_ROOT}/github/ISSUE_TEMPLATE/config.yml" ".github/ISSUE_TEMPLATE/config.yml"
   seed_copy "${TEMPLATES_ROOT}/github/PULL_REQUEST_TEMPLATE.md" ".github/PULL_REQUEST_TEMPLATE.md"
-  # Starter ignore. Skip when the consumer already has one.
-  seed_copy "${TEMPLATES_ROOT}/gitignore" ".gitignore"
+else
+  echo "seed skip (layers.templates is not true): issue and PR templates"
+fi
 
-  # AGENTS.md / CLAUDE.md — idempotent delimited blocks
-  if [[ -n "$WORKDIR" ]]; then
-    agents_block="$(render_relentless_agents_block "$MERGE_DEFAULT" "$HARNESS" "$STACK" "$INSTALL" "$LINT" "$TYPECHECK" "$TEST" "$BUILD")"
-    claude_block="$(render_relentless_claude_block "$MERGE_DEFAULT" "$HARNESS" "$STACK" "$TEST")"
-    if [[ "$APPLY" -eq 1 ]]; then
-      upsert_relentless_block "${WORKDIR}/AGENTS.md" "$agents_block"
-      upsert_relentless_block "${WORKDIR}/CLAUDE.md" "$claude_block"
-    else
-      echo "seed upsert: AGENTS.md (relentless block)"
-      echo "seed upsert: CLAUDE.md (relentless block)"
-    fi
-  else
-    echo "seed (needs --workdir): AGENTS.md / CLAUDE.md relentless blocks"
-  fi
-
-  if [[ "$HARNESS" == "codex" || "$HARNESS" == "both" ]]; then
-    for agent in planner implementer qa reviewer orchestrator documenter; do
-      src="${SCRIPT_DIR}/../../.codex/agents/${agent}.toml"
-      if [[ ! -f "$src" ]]; then
-        continue
-      fi
-      # F46: --upgrade refreshes owned agent briefs; first install keeps seed_copy.
-      if [[ "$UPGRADE" -eq 1 ]]; then
-        seed_write "$src" ".codex/agents/${agent}.toml"
-      else
-        seed_copy "$src" ".codex/agents/${agent}.toml"
-      fi
-    done
-    # F48: pin marketplace ref in project .codex/config.toml when missing (Codex has no lockfile).
-    if [[ -n "$WORKDIR" ]]; then
-      codex_cfg="${WORKDIR}/.codex/config.toml"
-      pin_ver="$(jq -r .version "${SCRIPT_DIR}/../../plugin.json" 2>/dev/null || echo "")"
-      if [[ -n "$pin_ver" ]]; then
-        if [[ ! -f "$codex_cfg" ]]; then
-          echo "seed write: .codex/config.toml (marketplace pin ref=v${pin_ver})"
-          if [[ "$APPLY" -eq 1 ]]; then
-            mkdir -p "$(dirname "$codex_cfg")"
-            cat > "$codex_cfg" <<EOF
-# Relentless Codex pin (no native per-project plugin lockfile on 0.165.x).
-# After bumping the plugin, re-run bootstrap --upgrade or edit ref= below.
-[marketplaces.relentless]
-source_type = "git"
-source = "https://github.com/marcelusfernandes/relentless"
-ref = "v${pin_ver}"
-
-[plugins."relentless@relentless"]
-enabled = true
-EOF
-          fi
-        elif [[ "$UPGRADE" -eq 1 ]]; then
-          if grep -q '^\[marketplaces\.relentless\]' "$codex_cfg" 2>/dev/null; then
-            echo "seed skip (exists): .codex/config.toml marketplace pin — edit ref= manually or replace the file"
-          else
-            echo "seed append: .codex/config.toml marketplace pin ref=v${pin_ver}"
-            if [[ "$APPLY" -eq 1 ]]; then
-              cat >> "$codex_cfg" <<EOF
-
-# Relentless Codex pin (added by bootstrap --upgrade)
-[marketplaces.relentless]
-source_type = "git"
-source = "https://github.com/marcelusfernandes/relentless"
-ref = "v${pin_ver}"
-
-[plugins."relentless@relentless"]
-enabled = true
-EOF
-            fi
-          fi
-        else
-          echo "seed skip (exists): .codex/config.toml"
-        fi
-      fi
-    fi
-  else
-    echo "seed skip (--harness claude): .codex/agents/*.toml"
-  fi
-
-  # CI is written only on the first bootstrap (config.json was absent).
-  # An existing file is kept. A file deleted after that stays deleted.
-  if [[ -n "$WORKDIR" && -f "${WORKDIR}/.github/workflows/relentless-ci.yml" ]]; then
-    if [[ "$UPGRADE" -eq 1 ]]; then
-      echo "seed skip (upgrade preserves CI): .github/workflows/relentless-ci.yml"
-    else
-      echo "seed skip (exists): .github/workflows/relentless-ci.yml"
-    fi
-  elif [[ "$CONFIG_EXISTED" -eq 1 ]]; then
-    echo "seed skip (config already present; workflow file stays absent): .github/workflows/relentless-ci.yml"
-  elif [[ "$SCOPE_OK" -eq 1 ]]; then
-    if [[ -n "$WORKDIR" ]]; then
-      echo "seed write: .github/workflows/relentless-ci.yml (stack=${STACK} has_test=${HAS_TEST})"
-      if [[ "$APPLY" -eq 1 ]]; then
-        render_relentless_ci_to_file "${WORKDIR}/.github/workflows/relentless-ci.yml"
-      fi
-    else
-      echo "seed (needs --workdir): .github/workflows/relentless-ci.yml"
-    fi
-  else
-    echo "seed skip (no workflow scope): .github/workflows/relentless-ci.yml"
-  fi
-
-  seed_copy "${TEMPLATES_ROOT}/milestone-outcome.md" "docs/relentless/milestone-outcome.example.md"
-  seed_copy "${TEMPLATES_ROOT}/epic-body.md" "docs/relentless/epic-body.example.md"
-  seed_copy "${TEMPLATES_ROOT}/investigation-body.md" "docs/relentless/investigation-body.example.md"
-
-  # Decision records (first-class) + status + follow-up + worktreeinclude
+if layer_on decisions; then
   seed_copy "${TEMPLATES_ROOT}/decisions/README.md" "docs/decisions/README.md"
   seed_copy "${TEMPLATES_ROOT}/decisions/log.jsonl" "docs/decisions/log.jsonl"
   seed_copy "${TEMPLATES_ROOT}/decisions/adr-template.md" "docs/decisions/adr/TEMPLATE.md"
   seed_copy "${TEMPLATES_ROOT}/decisions/note-template.md" "docs/decisions/notes/TEMPLATE.md"
-  seed_copy "${TEMPLATES_ROOT}/status-mN.md" "docs/status/TEMPLATE.md"
-  seed_copy "${TEMPLATES_ROOT}/follow-up-after-review.md" "docs/relentless/follow-up-after-review.example.md"
-  # .worktreeinclude — only if absent (consumer-owned secrets list)
-  if [[ -n "$WORKDIR" ]]; then
-    wtinc="${WORKDIR}/.worktreeinclude"
-    if [[ ! -f "$wtinc" ]]; then
-      echo "seed write: .worktreeinclude"
-      if [[ "$APPLY" -eq 1 ]]; then
-        cat > "$wtinc" <<'WTINC'
-# Paths (relative to repo root) copied into each Relentless worktree after `worktree-create.sh`.
-# Add local-only files the implementer needs (.env.local, etc.). Do not commit secrets.
-# .env.local
-WTINC
-      fi
-    else
-      echo "seed skip (exists): .worktreeinclude"
-    fi
-    # Ensure adr/notes dirs exist on apply even if copy skipped
-    if [[ "$APPLY" -eq 1 ]]; then
-      mkdir -p "${WORKDIR}/docs/decisions/adr" "${WORKDIR}/docs/decisions/notes" "${WORKDIR}/docs/status"
-    fi
-  else
-    echo "seed (needs --workdir): docs/decisions/*, docs/status/TEMPLATE.md, .worktreeinclude"
-  fi
 else
-  echo "seed: skipped (--no-seed-files)"
+  echo "seed skip (layers.decisions is not true): docs/decisions"
 fi
 
-apply_branch_protection() {
-  local branch="${DEFAULT_BRANCH:-main}"
-  [[ -n "$branch" ]] || branch="main"
-  local resp rc
-  set +e
-  resp="$(gh api -X POST "repos/${REPO}/rulesets" --input - <<JSON
+if layer_on ci; then
+  # shellcheck source=lib/detect-stack.sh
+  source "${SCRIPT_DIR}/lib/detect-stack.sh"
+  # shellcheck source=lib/render-ci.sh
+  source "${SCRIPT_DIR}/lib/render-ci.sh"
+  if [[ -n "$WORKDIR" && -d "$WORKDIR" ]]; then
+    detect_stack "$WORKDIR"
+  fi
+  if [[ -n "$WORKDIR" && -f "${WORKDIR}/.github/workflows/relentless-ci.yml" ]]; then
+    echo "seed skip (exists): .github/workflows/relentless-ci.yml"
+  elif [[ "$SCOPE_OK" -eq 1 && -n "$WORKDIR" ]]; then
+    echo "seed write: .github/workflows/relentless-ci.yml (stack=${STACK:-unknown})"
+    if [[ "$APPLY" -eq 1 ]]; then
+      render_relentless_ci_to_file "${WORKDIR}/.github/workflows/relentless-ci.yml"
+    fi
+  else
+    echo "seed skip (no workflow scope or no workdir): .github/workflows/relentless-ci.yml"
+  fi
+else
+  echo "seed skip (layers.ci is not true): .github/workflows/relentless-ci.yml"
+fi
+
+if layer_on githooks; then
+  if [[ -n "$WORKDIR" ]]; then
+    if [[ "$APPLY" -eq 1 ]]; then
+      "${SCRIPT_DIR}/install-githooks.sh" --workdir "$WORKDIR"
+    else
+      echo "plan: install .relentless/githooks (pre-commit, pre-push)"
+    fi
+  else
+    echo "githooks: needs --workdir"
+  fi
+else
+  echo "seed skip (layers.githooks is not true): .relentless/githooks"
+fi
+
+if [[ "$HARNESS" == "codex" || "$HARNESS" == "both" ]]; then
+  if layer_on review; then
+    seed_copy "${SCRIPT_DIR}/../../.codex/agents/reviewer.toml" ".codex/agents/reviewer.toml"
+  fi
+  if layer_on qa; then
+    seed_copy "${SCRIPT_DIR}/../../.codex/agents/qa.toml" ".codex/agents/qa.toml"
+  fi
+  if layer_on docs; then
+    seed_copy "${SCRIPT_DIR}/../../.codex/agents/documenter.toml" ".codex/agents/documenter.toml"
+  fi
+fi
+
+if [[ "$BRANCH_PROTECTION" -eq 1 ]]; then
+  echo "branch protection: opted in (fail-soft; config is not rewritten)"
+  if [[ "$APPLY" -eq 1 ]]; then
+    branch="${DEFAULT_BRANCH:-main}"
+    # intentional fail-soft: branch protection is opt-in and often denied
+    gh api -X POST "repos/${REPO}/rulesets" --input - <<JSON || echo "warn: branch protection API failed" >&2
 {
   "name": "relentless-protect-default",
   "target": "branch",
   "enforcement": "active",
   "bypass_actors": [],
-  "conditions": {
-    "ref_name": {
-      "include": ["refs/heads/${branch}"],
-      "exclude": []
-    }
-  },
-  "rules": [
-    {"type": "deletion"},
-    {"type": "non_fast_forward"}
-  ]
+  "conditions": {"ref_name": {"include": ["refs/heads/${branch}"], "exclude": []}},
+  "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]
 }
 JSON
-)"
-  rc=$?
-  set -e
-  if [[ $rc -ne 0 ]]; then
-    # intentional fail-soft: branch protection is opt-in and often denied by token scope
-    echo "warn: branch protection API failed (not enabled): ${resp}" >&2
-    return 0
-  fi
-  echo "branch protection: enabled on ${branch} (deletion + non-fast-forward blocked)"
-}
-
-if [[ -n "$WORKDIR" ]]; then
-  if [[ "$APPLY" -eq 1 ]]; then
-    "${SCRIPT_DIR}/install-githooks.sh" --workdir "$WORKDIR"
-  else
-    echo "plan: install .relentless/githooks (pre-commit, pre-push)"
-    echo "plan: core.hooksPath=.relentless/githooks, or chain an existing hooksPath/husky without replacing it"
-    echo "plan: hooks refuse commits on main/master, pushes to main/master, and force-pushes"
-  fi
-else
-  echo "githooks: needs --workdir"
-fi
-
-if [[ "$BRANCH_PROTECTION" -eq 1 ]]; then
-  echo "branch protection: opted in (fail-soft)"
-  if [[ "$APPLY" -eq 1 ]]; then
-    apply_branch_protection
-  else
-    echo "plan: would enable GitHub branch protection on ${DEFAULT_BRANCH:-main}"
   fi
 else
   echo "branch protection: off (default; pass --branch-protection only after an explicit yes)"
 fi
 
 echo "== done ($MODE) =="
-echo "tip: use skill setup or /relentless:setup for interactive prep (PR with seeds)."
+echo "tip: use skill setup or /relentless:setup for interactive prep."
 echo "tip: do NOT copy plugin agents/skills into this repo."
-echo "tip: Claude — install at PROJECT scope:"
-echo "     claude plugin marketplace add marcelusfernandes/relentless"
-echo "     claude plugin install relentless@relentless --scope project -y"
-echo "tip: Codex (0.165.x) user-level only: codex plugin add relentless@relentless"
-echo "tip: re-run --apply or --upgrade --apply to add what is missing. Existing labels, forms, config values, and relentless-ci.yml stay as they are."
+echo "tip: re-run --apply to add a missing config, docs block, or core label. Existing files stay as they are."

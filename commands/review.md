@@ -10,7 +10,7 @@ argument-hint: "<pr-number> [issue-number]"
 Prefer one-shot:
 ```bash
 core/scripts/run-isolated-review.sh --repo OWNER/NAME --pr $1 --issue $2 \
-  --harness claude --workdir . --merge
+  --harness claude --workdir . --also-merge
 ```
 
 Manual sequence:

@@ -57,7 +57,7 @@ Configured for: **${harness}**
 Read \`docs/decisions/\` before planning or implementing. ADR = human gate (\`/decide\` → accepted). Notes = no gate. Planner records durable forks as ADRs; reviewer requires ADR references when a PR touches a decided area.
 
 ## Worktree per writer
-Each implementer uses its own git worktree from fresh \`origin/main\` on \`<type>/<n>-<slug>\`. Remote push = lock. Skill \`worktree-segura\`. Never branch off another feature branch.
+Each implementer uses its own git worktree from the repo base branch (\`base\` in \`.relentless/config.json\`) on \`<type>/<n>-<slug>\`. Remote push = lock. Skill \`worktree-segura\`. Never branch off another feature branch.
 
 ## Git hygiene
 Conventional commits + plain \`Closes #N\`. Explicit named failure (no silent \`|| true\` in project code).

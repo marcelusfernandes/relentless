@@ -8,7 +8,7 @@
 # Usage:
 #   run-isolated-review.sh --repo OWNER/NAME --pr N --issue N \
 #     [--harness claude|codex] [--workdir PATH] [--out-dir PATH] \
-#     [--from-output PATH] [--merge] [--dry-run]
+#     [--from-output PATH] [--also-merge] [--dry-run]
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
     --workdir) WORKDIR="${2:-}"; shift 2 ;;
     --out-dir) OUT_DIR="${2:-}"; shift 2 ;;
     --from-output) FROM_OUTPUT="${2:-}"; shift 2 ;;
-    --merge) MERGE=1; shift ;;
+    --also-merge) MERGE=1; shift ;;
     --dry-run) DRY=1; shift ;;
     -h|--help)
       sed -n '2,11p' "$0" | tr -d '#'
@@ -131,7 +131,7 @@ PROMPT_FILE="${OUT_DIR}/reviewer-prompt.md"
 if [[ "$DRY" -eq 1 ]]; then
   echo "dry-run: would spawn $HARNESS reviewer with stdin from $PROMPT_FILE"
   echo "dry-run: would export RELENTLESS_ROLE=reviewer CLAUDE_AGENT=reviewer"
-  echo "dry-run: then apply-review-verdict + $([ "$MERGE" -eq 1 ] && echo merge-if-ready || echo 'no --merge')"
+  echo "dry-run: then apply-review-verdict + $([ "$MERGE" -eq 1 ] && echo merge-if-ready || echo 'no merge step')"
   exit 0
 fi
 
