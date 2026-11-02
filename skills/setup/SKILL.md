@@ -30,7 +30,7 @@ If the repo already has Relentless and you only need the new agent briefs / docs
   --harness both --upgrade --apply
 ```
 
-Keeps customized `checks` and `relentless-ci.yml`. Then commit on a branch and open a PR as usual.
+Adds only what is missing. Keeps customized checks, stack, package manager, merge default, issue forms, and an existing or deleted `relentless-ci.yml`. Then commit on a branch and open a PR as usual.
 
 ## Plugin install (before or during)
 

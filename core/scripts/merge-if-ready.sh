@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # merge-if-ready.sh — orchestrator final step after isolated review.
-# Resolves merge mode (issue merge:* else config merge.default).
+# Resolves merge mode: merge.default, unless allow_issue_override lets a merge:* label win.
 # auto: require CI green on head SHA + review:approved → merge commit, state:done, close issue.
 # The latest relentless:review-verdict comment must record that same full headRefOid.
 # No SHA refuses the merge (older approvals are not kept). A different SHA drops review:approved.

@@ -18,7 +18,7 @@ if [[ "$*" == *watch* ]]; then
 fi
 case "$1 $2" in
   "pr view")
-    printf '%s\n' '{"headRefName":"feat/1-x"}'
+    printf '%s\n' '{"headRefName":"feat/1-x","headRefOid":"abc1111"}'
     ;;
   "run list")
     echo list >> "${GH_CALLS:-/dev/null}"
@@ -38,6 +38,14 @@ case "$1 $2" in
     ;;
   *)
     if [[ "$1" == "api" ]]; then
+      if [[ "$*" == *"/commits/"* && "$*" == *"check-runs"* && "$*" != *"annotations"* ]]; then
+        if [[ -n "${GH_CHECK_RUNS:-}" && -f "$GH_CHECK_RUNS" ]]; then
+          cat "$GH_CHECK_RUNS"
+        else
+          echo '{"check_runs":[]}'
+        fi
+        exit 0
+      fi
       if [[ -n "${GH_API_BODY:-}" && -f "$GH_API_BODY" ]]; then
         cat "$GH_API_BODY"
         exit 0
@@ -59,6 +67,7 @@ export GH_CHECKS_RC=8
 export GH_RUN_LIST="$TMP/runs.json"
 export GH_RUN_VIEW="$TMP/run-view.json"
 export GH_API_BODY="$TMP/api.json"
+export GH_CHECK_RUNS="$TMP/check-runs.json"
 export GH_CALLS="$TMP/gh-calls"
 : >"$GH_CALLS"
 printf '%s\n' 'no checks reported' >"$GH_CHECKS_OUT"
@@ -155,6 +164,64 @@ else
   bad "real step failure rc=$rc out=$out err=$(cat "$TMP/err")"
 fi
 
+# Newest workflow run is green and belongs to another workflow. tests-ok on
+# this head SHA is red, so the green run must not count as CI green.
+printf '%s\n' '[{"databaseId":11,"status":"completed","conclusion":"success","name":"other","headSha":"abc1111"}]' >"$GH_RUN_LIST"
+cat >"$GH_CHECK_RUNS" <<'EOF'
+{"check_runs":[
+  {"name":"other","status":"completed","conclusion":"success","started_at":"2026-11-02T00:00:02Z"},
+  {"name":"tests-ok","status":"completed","conclusion":"failure","started_at":"2026-11-02T00:00:01Z"}
+]}
+EOF
+out="$(run_wait 2>"$TMP/err")"
+rc=$?
+if [[ "$rc" -eq 1 && "$(cat "$TMP/err")" == *"CI failed"* && "$(cat "$TMP/err")" != *"CI unavailable (quota)"* ]]; then
+  ok
+else
+  bad "tests-ok red under a newer green workflow rc=$rc out=$out err=$(cat "$TMP/err")"
+fi
+
+cat >"$GH_CHECK_RUNS" <<'EOF'
+{"check_runs":[
+  {"name":"other","status":"completed","conclusion":"success","started_at":"2026-11-02T00:00:02Z"},
+  {"name":"tests-ok","status":"completed","conclusion":"success","started_at":"2026-11-02T00:00:01Z"}
+]}
+EOF
+out="$(run_wait 2>"$TMP/err")"
+rc=$?
+if [[ "$rc" -eq 0 && "$out" == *"CI green"* && ! -s "$TMP/err" ]]; then
+  ok
+else
+  bad "both checks green rc=$rc out=$out err=$(cat "$TMP/err")"
+fi
+
+# The only check run is a fast green workflow. CI has not created tests-ok yet.
+printf '%s\n' '[{"databaseId":12,"status":"in_progress","conclusion":null,"name":"CI","headSha":"abc1111","workflowName":"CI"}]' >"$GH_RUN_LIST"
+cat >"$GH_CHECK_RUNS" <<'EOF'
+{"check_runs":[
+  {"name":"other","status":"completed","conclusion":"success","started_at":"2026-11-02T00:00:02Z"}
+]}
+EOF
+out="$(run_wait 2>"$TMP/err")"
+rc=$?
+if [[ "$rc" -eq 3 && "$out" == *"CI: pending"* && "$out" == *"exit 3"* && "$out" == *"foreground"* && "$out" == *"run 12"* && "$out" == *"in_progress"* ]]; then
+  ok
+else
+  bad "green other check with CI still in progress rc=$rc out=$out err=$(cat "$TMP/err")"
+fi
+
+# startup_failure creates no job, so it is absent from the check list.
+printf '%s\n' '[{"databaseId":13,"status":"completed","conclusion":"startup_failure","name":"CI","headSha":"abc1111","workflowName":"CI"}]' >"$GH_RUN_LIST"
+out="$(run_wait 2>"$TMP/err")"
+rc=$?
+if [[ "$rc" -eq 1 && "$(cat "$TMP/err")" == *"CI failed"* && "$(cat "$TMP/err")" != *"CI unavailable (quota)"* ]]; then
+  ok
+else
+  bad "startup_failure beside a green check rc=$rc out=$out err=$(cat "$TMP/err")"
+fi
+rm -f "$GH_CHECK_RUNS"
+unset GH_CHECK_RUNS
+
 unset GH_RUN_VIEW
 rm -f "$GH_API_BODY"
 
@@ -230,6 +297,10 @@ if [[ "$1" == "run" && "$2" == "view" ]]; then
   exit 99
 fi
 if [[ "$1" == "api" ]]; then
+  if [[ "$*" == *"/commits/"* && "$*" == *"check-runs"* && "$*" != *"annotations"* ]]; then
+    echo '{"check_runs":[]}'
+    exit 0
+  fi
   if [[ "$*" == *"pulls/3/files"* ]]; then
     echo README.md
     exit 0
@@ -272,6 +343,11 @@ if [[ "$1" == "pr" ]]; then
   fi
   if [[ "$*" == *"headRefName"* && "$*" != *"headRefOid"* ]]; then
     echo "feat/1-x"
+    exit 0
+  fi
+  # wait-ci reads the head SHA without advancing the merge-if-ready counter.
+  if [[ "$*" == *"headRefOid"* && "$*" == *"headRefName"* && "$*" != *"state"* ]]; then
+    printf '{"headRefOid":"%s","headRefName":"feat/1-x"}\n' "${GH_SHA1:?}"
     exit 0
   fi
   if [[ "$*" == *"headRefOid"* ]]; then

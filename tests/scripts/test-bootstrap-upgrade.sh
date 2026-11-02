@@ -109,10 +109,10 @@ fi
 
 # Codex pin seeded
 if [[ -f "$TMP/repo/.codex/config.toml" ]] && grep -q 'marketplaces.relentless' "$TMP/repo/.codex/config.toml"; then
-  if grep -q 'ref = "v1.4.9"' "$TMP/repo/.codex/config.toml"; then
-    ok "Codex marketplace pin seeded at v1.4.9"
+  if grep -q 'ref = "v1.4.10"' "$TMP/repo/.codex/config.toml"; then
+    ok "Codex marketplace pin seeded at v1.4.10"
   else
-    bad "Codex pin missing v1.4.9 ref"
+    bad "Codex pin missing v1.4.10 ref"
   fi
 else
   bad "Codex config.toml pin not seeded"

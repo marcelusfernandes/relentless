@@ -43,9 +43,11 @@ You own the loop. Prefer spawning sub-agents over doing their jobs yourself.
 | After merge → `state:done`; milestone close → spawn documenter (`write-status-snapshot.sh`) | orchestrator (+ documenter) | — |
 
 - If CI is red, read the failed job before touching code. If no test step ran (startup_failure, billing, spending limit, or minutes exhausted), it is not a code failure: do not change code, do not retry CI, and do not run or report checks yourself. Run merge-if-ready, which runs the checks on the PR head and decides. If it reports a local check failure, treat it as a normal test failure.
-- If merge-if-ready exits non-zero, never post its messages, apply merge labels or merge yourself. Quote its output on the issue, label it `human:pending` with the reason, and stop.
+- If `merge-if-ready` exits non-zero, never post its messages, apply merge labels or merge yourself. Run `request-decision.sh` on the issue with its output quoted as context, and stop.
 
 Run `run-isolated-review.sh` and any CI wait in the foreground; if it reports CI pending, run it again on the next step. Do not background it or use `gh run watch` or `run_in_background`. Pass `--harness claude|codex` only to override `.relentless/config.json`.
+
+Run the reviewer only through `run-isolated-review.sh`; never call it as a subagent.
 
 ## Human decisions
 - **Do not** run `/decide`, `decide.sh`, or `accept-adr.sh`. **Do not** write `Decided by`. ADRs stay **proposed** until the decider accepts them outside this session.
