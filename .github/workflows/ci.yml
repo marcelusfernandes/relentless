@@ -45,6 +45,7 @@ jobs:
           # ruby loads the GitHub template YAML. github-cli is the gh the bootstrap suite calls.
           # Do not add the bash package: that would replace the image bash 3.2.
           apk add --no-cache jq git python3 ruby github-cli
+          bash --version | grep -q 'version 3.2'
           git config --global --add safe.directory /work
           bash tests/hooks/test-hooks.sh
           bash tests/hooks/test-decide-guard.sh

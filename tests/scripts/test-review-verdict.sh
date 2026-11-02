@@ -555,7 +555,7 @@ for f in "${manifests[@]}"; do
     break
   fi
 done
-if [[ -n "$version_bad" || "$seen" != "1.4.10" ]]; then
+if [[ -n "$version_bad" || "$seen" != "1.4.11" ]]; then
   bad "manifest versions: ${version_bad:-seen=$seen}"
 else
   ok

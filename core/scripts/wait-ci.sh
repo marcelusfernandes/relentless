@@ -9,8 +9,8 @@
 # does not cover a red check on that SHA. A green check list is not enough
 # on its own: jobs appear only after a workflow creates them, so the workflow
 # runs on that SHA are judged too. Green requires both. A run still queued,
-# pending, or in progress stays pending. failure, startup_failure, and
-# cancelled are red.
+# pending, or in progress stays pending. startup_failure is quota, and a
+# failure conclusion is red only when it is not quota.
 #
 # One invocation polls until --timeout-sec (default 30), then returns:
 #   0  CI green
@@ -226,28 +226,11 @@ judge_checks() {
 }
 
 # Workflow runs on the SHA, latest per workflow. Used when the check list
-# already looks green. Prints verdict<TAB>run_id<TAB>status.
-# failure / startup_failure / cancelled are red here: a startup_failure
-# creates no job, so the check list cannot see it.
+# already looks green. Same contract as judge_checks: startup_failure is
+# quota (no job ran), and a failure conclusion is red only when run_is_quota
+# says it is not quota. A run that has not finished stays pending.
 judge_workflow_runs() {
-  local json="$1" line=""
-  line="$(jq -r '
-    def bad: .status == "completed" and (
-      .conclusion == "failure" or .conclusion == "startup_failure" or .conclusion == "cancelled"
-      or .conclusion == "timed_out" or .conclusion == "action_required"
-    );
-    def waiting: .status == "pending" or .status == "in_progress" or .status == "queued"
-      or .status == "waiting" or .status == "requested";
-    if any(.[]; bad) then
-      first(.[] | select(bad)) | "failed\t\(.run_id)\tcompleted"
-    elif any(.[]; waiting) then
-      first(.[] | select(waiting)) | "pending\t\(.run_id)\t\(.status)"
-    else
-      "green\t\((.[0].run_id // ""))\tcompleted"
-    end
-  ' <<<"$json" 2>/dev/null || true)"  # intentional fail-soft: unreadable runs are not a green signal
-  [[ -n "$line" ]] || line=$'failed\t\tcompleted'
-  printf '%s\n' "$line"
+  judge_checks "$1"
 }
 
 while (( SECONDS < deadline )); do

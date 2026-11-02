@@ -211,13 +211,42 @@ else
 fi
 
 # startup_failure creates no job, so it is absent from the check list.
+# No test ran: that is quota, not a code failure.
 printf '%s\n' '[{"databaseId":13,"status":"completed","conclusion":"startup_failure","name":"CI","headSha":"abc1111","workflowName":"CI"}]' >"$GH_RUN_LIST"
+out="$(run_wait 2>"$TMP/err")"
+rc=$?
+if [[ "$rc" -eq 4 && "$(cat "$TMP/err")" == *"CI unavailable (quota)"* && "$(cat "$TMP/err")" != *"CI failed"* ]]; then
+  ok
+else
+  bad "startup_failure beside a green check rc=$rc out=$out err=$(cat "$TMP/err")"
+fi
+
+# A failed workflow run that run_is_quota classifies as quota is also quota.
+cat >"$GH_RUN_VIEW" <<'EOF'
+{"headSha":"abc1111","conclusion":"failure","jobs":[{"databaseId":5,"conclusion":"failure","status":"completed","steps":[{"name":"Run tests","conclusion":"failure","status":"completed"}]}]}
+EOF
+printf '%s\n' '[{"message":"The job was not started because the spending limit was exceeded"}]' >"$GH_API_BODY"
+printf '%s\n' '[{"databaseId":14,"status":"completed","conclusion":"failure","name":"CI","headSha":"abc1111","workflowName":"CI"}]' >"$GH_RUN_LIST"
+out="$(run_wait 2>"$TMP/err")"
+rc=$?
+if [[ "$rc" -eq 4 && "$(cat "$TMP/err")" == *"CI unavailable (quota)"* && "$(cat "$TMP/err")" != *"CI failed"* ]]; then
+  ok
+else
+  bad "quota failure beside a green check rc=$rc out=$out err=$(cat "$TMP/err")"
+fi
+
+# A real test failure on a workflow run is red even when the other check is green.
+cat >"$GH_RUN_VIEW" <<'EOF'
+{"headSha":"abc1111","conclusion":"failure","jobs":[{"databaseId":5,"conclusion":"failure","status":"completed","steps":[{"name":"Run tests","conclusion":"failure","status":"completed"}]}]}
+EOF
+printf '%s\n' '[{"message":"Process completed with exit code 1"}]' >"$GH_API_BODY"
+printf '%s\n' '[{"databaseId":15,"status":"completed","conclusion":"failure","name":"CI","headSha":"abc1111","workflowName":"CI"}]' >"$GH_RUN_LIST"
 out="$(run_wait 2>"$TMP/err")"
 rc=$?
 if [[ "$rc" -eq 1 && "$(cat "$TMP/err")" == *"CI failed"* && "$(cat "$TMP/err")" != *"CI unavailable (quota)"* ]]; then
   ok
 else
-  bad "startup_failure beside a green check rc=$rc out=$out err=$(cat "$TMP/err")"
+  bad "real failure beside a green check rc=$rc out=$out err=$(cat "$TMP/err")"
 fi
 rm -f "$GH_CHECK_RUNS"
 unset GH_CHECK_RUNS
