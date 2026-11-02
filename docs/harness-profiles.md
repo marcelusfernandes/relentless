@@ -128,7 +128,7 @@ Setup / `bootstrap.sh` installs `.relentless/githooks/pre-commit` and `pre-push`
 
 - Unset `core.hooksPath` → set it to `.relentless/githooks`. An existing executable `.git/hooks/pre-commit` or `pre-push` is still chained.
 - Existing `core.hooksPath` (husky or otherwise) → left unchanged; the hook files gain one `# relentless:githooks` chain call. Re-running does not duplicate it.
-- They refuse commits on `main`/`master`, pushes that update `refs/heads/main` or `refs/heads/master`, and non-fast-forward pushes. The pre-push hook sees the old and new SHAs, not the `--force` flag, so a fast-forward update is allowed even if the client passed `--force`. The agent PreToolUse hook still blocks every force-push spelling (`-f`, `--force`, `--force-with-lease`, `+refspec`) before git runs.
+- When `layers.githooks` is on, they refuse commits on `main`/`master`, pushes that update `refs/heads/main` or `refs/heads/master`, and non-fast-forward pushes. The pre-push hook sees the old and new SHAs, not the `--force` flag, so a fast-forward update is allowed even if the client passed `--force`. A fresh bootstrap leaves the layer off. A config with no `layers` key keeps the hooks. There is no PreToolUse protect-main hook.
 - GitHub branch protection on main is **not** enabled by default. Setup asks; pass `--branch-protection` only after an explicit yes (fail-soft). On Codex without a sandbox the git-side hooks are advisory, since an agent can bypass them with `git push --no-verify` or `git -c core.hooksPath=/dev/null ...`, so branch protection is the only hard lock on `main` there. Private and organization repositories also have GitHub Actions minute limits. When that quota or the spending limit is exhausted, `merge-if-ready` runs the configured checks locally on the PR head and notes that on the PR. With `merge:auto`, a pass on a stable head SHA may merge without a human. `merge:human` still waits. A self-hosted runner is how to keep real Actions CI. Proposed in `docs/decisions/adr/0003-ci-quota-local-checks.md`.
 
 ## End of turn
@@ -138,7 +138,7 @@ There is no Claude Stop hook. The implementer brief is the rule: tests pass, and
 ## Hook regression tests
 
 ```bash
-bash tests/hooks/test-hooks.sh          # PreToolUse protect-main, reviewer isolation, decide block
+bash tests/hooks/test-hooks.sh          # reviewer isolation, decide block; protect-main is gone
 bash tests/hooks/test-decide-guard.sh   # agent refusal, forged env, human PTY, UserPromptSubmit, merge ADR guard
 bash tests/hooks/test-githooks.sh       # core.hooksPath install, husky chain, main and force-push
 python3 tests/agents/test-codex-agent-briefs.py  # Codex TOML instructions cover agents/*.md

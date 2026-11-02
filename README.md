@@ -163,10 +163,10 @@ Installing the plugin alone is not enough. Prefer **Getting started → Set up**
 
 | Piece | Behavior |
 |-------|----------|
-| **Config** | Writes `.relentless/config.json` only when it is missing: `base`, the merge methods the repo allows, `checks.test` from the repo's own workflow, and `layers.*` all false. An existing config is not edited. |
-| **AGENTS.md / CLAUDE.md** | Upserts a `<!-- relentless:start -->` … `<!-- relentless:end -->` block. |
+| **Config** | Writes `.relentless/config.json` when it is missing: `base`, the merge methods the repo allows, `checks.test` from the repo's own workflow, and `layers.*` all false. An existing config is kept. `checks.test` is filled from the repo workflow only when that field is absent or empty. |
+| **AGENTS.md / CLAUDE.md** | Upserts a `<!-- relentless:start -->` … `<!-- relentless:end -->` block. The wave ends at `state:review`. Each enabled layer adds one line. The checks table shows the config's commands. |
 | **Labels** | Creates missing core labels only (`state:*`, `human:pending`, `human:decided`, `epic`). Never edits an existing label. |
-| **Layers** | CI, issue templates, githooks, and decision files are written only when `layers.<name>` is already true. A fresh bootstrap leaves them off and does not touch an existing workflow, template, or `.codex` file. |
+| **Layers** | A fresh bootstrap leaves every layer off. A config with no `layers` key keeps the 1.4.11 layers on, including githooks. Inside `layers`, a switch runs only when it is true. Enabled layer files are copied to `.relentless/layers/`. A file that still has the `relentless:owned` marker is refreshed; a file without it is left as the repo wrote it. `merge:auto` has no effect while `layers.merge` is off: `merge-if-ready` exits with `merge layer is off; merge:auto has no effect` and does not merge. |
 | **Branch protection** | **Off** unless you pass `--branch-protection` after an explicit yes in setup. Fail-soft if the token cannot admin the repo. On Codex without a sandbox the git hooks are advisory (`git push --no-verify` or `git -c core.hooksPath=/dev/null ...`); branch protection is the only hard lock on `main` there. |
 | **Actions minutes** | Private and organization repositories have GitHub Actions minute limits. When the quota or spending limit is exhausted, `merge-if-ready` runs the configured checks locally on the PR head and notes the result on the PR. With `merge:auto`, if those checks pass and the head SHA is stable, it may merge without a human. `merge:human` still waits for a person. A self-hosted runner is how to keep real Actions CI. With no test command, the issue stops at `human:pending` and nothing is merged. |
 
@@ -205,7 +205,7 @@ Ask the agent for a product outcome (see [Getting started → First product requ
   --milestone "Theme: subtitle" --type enhancement --parent N --label merge:auto
 ```
 
-Implement → QA → **stop at `state:review`** → isolated reviewer → `apply-review-verdict` → **`merge-if-ready`**.
+Implement → **stop at `state:review`**. QA, review, and merge run only when those layers are on. A `merge:auto` label does nothing while `layers.merge` is off.
 
 Harness profiles: **`docs/harness-profiles.md`**. Plan / backlog: **`docs/PLAN.md`**.
 

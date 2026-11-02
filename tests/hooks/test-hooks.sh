@@ -10,17 +10,10 @@ ROOT="${RELENTLESS_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Parent checkout is main; the hook cwd is a nested repo on feat/1-x.
-# `cd ..` therefore lands on main, and `../other` is a second main checkout.
-git -C "$TMP" init -q -b main outer
-git -C "$TMP/outer" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
-git -C "$TMP" init -q -b main outer/other
-git -C "$TMP/outer/other" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
-git -C "$TMP" init -q -b main outer/repo
-git -C "$TMP/outer/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
-git -C "$TMP/outer/repo" branch feat/1-x
-mkdir -p "$TMP/outer/repo/sub"
-REPO="$TMP/outer/repo"
+git -C "$TMP" init -q -b main repo
+git -C "$TMP/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+git -C "$TMP/repo" branch feat/1-x
+REPO="$TMP/repo"
 
 PASS=0
 FAIL=0
@@ -41,46 +34,17 @@ run() { # hook branch env expected cmd
   fi
 }
 
-M=pretool-protect-main.sh
 R=pretool-reviewer-isolation.sh
 G=pretool-gh-workflow.sh
 N="X=1"
 
-# force-push: block every spelling, allow normal push and branch names that merely say "force"
-run $M feat/1-x "$N" 2 'git push -f'
-run $M feat/1-x "$N" 2 'git push --force'
-run $M feat/1-x "$N" 2 'git push --force origin feat/1-x'
-run $M feat/1-x "$N" 2 'git push --force-with-lease'
-run $M feat/1-x "$N" 2 'git push --force-with-lease=refs/heads/feat/1-x'
-run $M feat/1-x "$N" 2 'git push origin +feat/1-x'
-run $M feat/1-x "$N" 2 'git push origin feat/1-x --force'
-run $M feat/1-x "$N" 2 'git -C ../other push -f'
-run $M feat/1-x "$N" 0 'git push -u origin feat/1-x'
-run $M feat/1-x "$N" 0 'git push origin feat/1-x'
-run $M feat/1-x "$N" 0 'git push origin feat/1-x-force-fix'
-run $M feat/1-x "$N" 0 'git commit -m "git push --force is mentioned only in the message"'
-
-# main: block commit/push targeting main, including another path; allow mentions
-run $M main "$N" 2 'git commit -m x'
-run $M main "$N" 2 'git push'
-run $M feat/1-x "$N" 2 'git push origin HEAD:main'
-run $M feat/1-x "$N" 2 'git -C ../other checkout main && git -C ../other commit -m x'
-run $M feat/1-x "$N" 2 'git -C ../other commit -m x'
-run $M feat/1-x "$N" 2 'cd .. && git commit -m x'
-run $M feat/1-x "$N" 2 'cd .. && git push'
-run $M feat/1-x "$N" 0 'git commit -m "fix: mention main branch in docs"'
-run $M feat/1-x "$N" 0 'git log main..HEAD'
-run $M feat/1-x "$N" 0 'cd .. && git status'
-run $M feat/1-x "$N" 0 'cd sub && git commit -m wip'
-run $M feat/1-x "$N" 0 'git -C sub commit -m wip'
-run $M feat/1-x "$N" 0 'git -C ../other log -1'
-
-# destructive
-run $M feat/1-x "$N" 2 'git reset --hard origin/main'
-run $M feat/1-x "$N" 2 'git clean -fdx'
-run $M feat/1-x "$N" 2 'git -C ../other reset --hard'
-run $M feat/1-x "$N" 0 'git reset --soft HEAD~1'
-run $M feat/1-x "$N" 0 'git clean -n'
+# pretool-protect-main is gone. Branch protection and the githooks layer are the lock.
+if [[ -e "$ROOT/hooks/scripts/pretool-protect-main.sh" ]] || grep -q 'pretool-protect-main' "$ROOT/hooks/hooks.json"; then
+  FAIL=$((FAIL + 1))
+  printf 'FAIL pretool-protect-main still registered\n'
+else
+  PASS=$((PASS + 1))
+fi
 
 # reviewer isolation
 run $R feat/1-x "RELENTLESS_ROLE=implementer" 2 'gh pr edit 3 --add-label review:approved'

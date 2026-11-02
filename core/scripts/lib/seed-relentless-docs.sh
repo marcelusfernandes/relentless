@@ -5,7 +5,18 @@
 RELENTLESS_BLOCK_START="<!-- relentless:start -->"
 RELENTLESS_BLOCK_END="<!-- relentless:end -->"
 
-# Args: merge_default harness stack install lint typecheck test build
+# Args: name, space-separated enabled layer names. 0 when name is enabled.
+_layer_in() {
+  case " $2 " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+# Args: merge_default harness stack install lint typecheck test build enabled_layers
+# enabled_layers is a space-separated list. The core wave always ends at
+# state:review. Each enabled layer adds one line. Text outside the managed
+# markers is not this function's concern.
 render_relentless_agents_block() {
   local merge_default="${1:-human}"
   local harness="${2:-both}"
@@ -15,6 +26,53 @@ render_relentless_agents_block() {
   local typecheck="${6:-}"
   local test="${7:-}"
   local build="${8:-}"
+  local enabled="${9:-}"
+  local extra=""
+
+  if _layer_in merge "$enabled" || _layer_in review "$enabled" || _layer_in qa "$enabled" \
+    || _layer_in worktrees "$enabled" || _layer_in decisions "$enabled" \
+    || _layer_in templates "$enabled" || _layer_in ci "$enabled" \
+    || _layer_in githooks "$enabled" || _layer_in docs "$enabled"; then
+    extra="${extra}
+## Enabled layers"
+  fi
+  if _layer_in merge "$enabled"; then
+    extra="${extra}
+- merge: Pin approval to the SHA, then \`merge-if-ready\`. A \`merge:auto\` label has no effect while this layer is off."
+  fi
+  if _layer_in review "$enabled"; then
+    extra="${extra}
+- review: Isolated reviewer subagent, then \`apply-review-verdict\`. Round 2 reads the latest verdict."
+  fi
+  if _layer_in qa "$enabled"; then
+    extra="${extra}
+- qa: Spawn qa before review and post the report with \`fill-qa-section.sh\`."
+  fi
+  if _layer_in worktrees "$enabled"; then
+    extra="${extra}
+- worktrees: One writer per worktree (\`worktree-create\`)."
+  fi
+  if _layer_in decisions "$enabled"; then
+    extra="${extra}
+- decisions: ADRs stay proposed until \`human:decided\`, then rewrite \`## Decision\` and append \`log.jsonl\`."
+  fi
+  if _layer_in templates "$enabled"; then
+    extra="${extra}
+- templates: Missing issue and PR forms may be added. Existing forms stay."
+  fi
+  if _layer_in ci "$enabled"; then
+    extra="${extra}
+- ci: \`.github/workflows/relentless-ci.yml\` is generated only when the repo has no CI workflow yet."
+  fi
+  if _layer_in githooks "$enabled"; then
+    extra="${extra}
+- githooks: \`.relentless/githooks\` refuses commits and pushes on main or master, and non-fast-forward pushes."
+  fi
+  if _layer_in docs "$enabled"; then
+    extra="${extra}
+- docs: At milestone close the documenter runs \`write-status-snapshot\`."
+  fi
+
   cat <<BLOCK
 ${RELENTLESS_BLOCK_START}
 # Relentless workflow (managed — do not edit inside markers)
@@ -25,19 +83,20 @@ This repo uses the **Relentless** agent plugin. Do **not** vendor plugin \`agent
 1. Outcome milestone (\`Theme: subtitle\`) via \`create-milestone.sh\`
 2. **Parent epic first** (understanding) via \`create-epic.sh\` / skill \`decompose-epic\`
 3. Native sub-issues via \`create-issue.sh --parent N\` / \`add-sub-issue.sh\`
-4. Implement → QA → \`state:review\` → **isolated** reviewer → \`apply-review-verdict\` → \`merge-if-ready\`
+4. Implement → \`state:review\`. The human merges, and the issue moves to \`state:done\` once the PR is merged.
+${extra}
 
 ## Labels
 - Exactly one \`state:*\` (swap with \`set-state.sh\`)
 - Exactly one type: \`bug\` | \`enhancement\` | \`documentation\` | \`investigation\` | \`epic\`
 - \`human:pending\` / \`human:decided\` — never bare-remove pending; use \`/decide\`
-- Merge override: \`merge:auto\` | \`merge:human\` (default for this repo: **${merge_default}**)
+- Merge override: \`merge:auto\` | \`merge:human\` (default for this repo: **${merge_default}**). \`merge:auto\` has no effect while \`layers.merge\` is off.
 
 ## Authorship markers
 - Agent comments: leading 🤖 + \`<!-- relentless:author=agent -->\`
 - Human / relayed: leading ☺️ + \`<!-- relentless:author=human decider="…" -->\`
 
-## Project checks (detected stack: **${stack}**)
+## Project checks (from \`.relentless/config.json\`; stack: **${stack}**)
 | Step | Command |
 |------|---------|
 | install | \`${install:-(none)}\` |
@@ -46,24 +105,13 @@ This repo uses the **Relentless** agent plugin. Do **not** vendor plugin \`agent
 | test | \`${test:-(none)}\` |
 | build | \`${build:-(none)}\` |
 
-CI workflow: \`.github/workflows/relentless-ci.yml\` (owned by Relentless; other workflows untouched).
-
 ## Harness
 Configured for: **${harness}**
 - Claude: \`claude plugin install relentless@relentless --scope project -y\`
 - Codex 0.165.x: user-level \`codex plugin add relentless@relentless\` (no project scope)
 
-## Decision records (first-class)
-Read \`docs/decisions/\` before planning or implementing. ADR = human gate (\`/decide\` → accepted). Notes = no gate. Planner records durable forks as ADRs; reviewer requires ADR references when a PR touches a decided area.
-
-## Worktree per writer
-Each implementer uses its own git worktree from the repo base branch (\`base\` in \`.relentless/config.json\`) on \`<type>/<n>-<slug>\`. Remote push = lock. Skill \`worktree-segura\`. Never branch off another feature branch.
-
 ## Git hygiene
-Conventional commits + plain \`Closes #N\`. Explicit named failure (no silent \`|| true\` in project code).
-
-## Git hooks
-\`.relentless/githooks/\` refuses commits on main/master, pushes to main/master, and non-fast-forward pushes. Setup points \`core.hooksPath\` there, or chains an existing hooksPath / husky without replacing it. GitHub branch protection stays **off** unless setup was explicitly answered yes. Private and organization repositories have Actions minute limits; when they are exhausted, \`merge-if-ready\` runs local checks and notes it on the PR. A self-hosted runner keeps real CI. \`merge:human\` still waits for a person.
+GitHub branch protection stays **off** unless setup was explicitly answered yes.
 
 ## Human decisions
 Do not run \`decide.sh\`, \`accept-adr.sh\`, or \`/decide\`, and do not write \`Decided by\`. ADRs stay **proposed**. With \`human:pending\`, post the decision request, tell the decider (\`decider.name\`) the exact \`decide.sh --repo … --issue N --option K\` command for their own terminal, and move on. A refusal is expected. On Claude, typing \`/decide\` is recorded by the UserPromptSubmit hook. Codex has no TTY, even in the interactive TUI.

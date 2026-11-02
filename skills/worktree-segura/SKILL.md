@@ -13,7 +13,7 @@ Lineage: marvinz → apollo → lohra-ts (ADR worktree-per-writer). Relentless p
 - Branch name: `<type>/<issue>-<slug>` (e.g. `feat/12-add-login`).
 - **Remote push of a new ref = lock.** If push fails because the branch exists, do not steal — pick another issue or resume that worktree.
 - Remove the worktree **after** merge (`worktree-cleanup.sh` / merge-if-ready `--cleanup-worktree`), never before.
-- Hooks block writes outside the worktree and commits/pushes to main when `RELENTLESS_ROLE=implementer` or `.relentless/worktree.json` is present.
+- When `layers.worktrees` is on, the worktree hook blocks writes outside the worktree. Commits and pushes on main are the repo's branch protection.
 
 ## A. Create (orchestrator or implementer start)
 ```bash
@@ -35,7 +35,7 @@ Optional: `--parent DIR`, `--path DIR`, `--base main`, `--dry-run`, `--no-push`.
 - **No destructive git:** no `stash`, `reset --hard`, `checkout -- <file>`, `clean -fd`. Compare with `git diff` / `git show`. Recover with `git reflog` first.
 - Checkpoint: commit when green. Uncommitted work exists only in this tree.
 - Round 2+ (same issue after review): stay in **the same** worktree; pull/merge `origin/<branch>` if needed; never force-push.
-- Conflict with the base branch on a published branch: `git fetch origin && git merge "origin/$(jq -r .base .relentless/config.json)"` (rebase of published branches is blocked by protect-main).
+- Conflict with the base branch on a published branch: `git fetch origin && git merge "origin/$(jq -r .base .relentless/config.json)"`.
 
 ## D. Before report back
 Commit an intentional checkpoint before reporting back. git stash is forbidden. Passing tests and a clean worktree are part of that report; a failing test is a blocker, not a finished turn.

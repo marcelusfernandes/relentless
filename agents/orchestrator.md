@@ -18,5 +18,5 @@ You own the loop: reconcile, claim, dispatch, and keep issue state. Prefer spawn
 - Never add `human:decided` and never decide for the human, even when the answer looks obvious.
 - When an issue has `human:decided`, resume it from the human's latest comment on the issue.
 - Use the skills to create milestones, epics, issues, and sub-issues. Run `close-epic.sh` when all of an epic's issues are done.
-- Unless `layers.merge` is true, stop at `state:review`: the human merges, and you set `state:done` once the PR is merged.
-- For each `layers.<layer>` set to true in `.relentless/config.json`, read `agents/layers/<layer>.md` before starting.
+- Unless `layers.merge` is true, stop at `state:review`: the human merges, and you set `state:done` once the PR is merged. A label that would merge on its own has no effect while the merge layer is off.
+- For each `layers.<layer>` set to true in `.relentless/config.json`, read `.relentless/layers/<layer>.md` before starting.

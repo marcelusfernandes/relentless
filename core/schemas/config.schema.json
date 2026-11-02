@@ -80,7 +80,7 @@
     },
     "layers": {
       "type": "object",
-      "description": "Optional layers. Missing or false stays off. A fresh bootstrap writes every switch false. Upgrade defaults for an existing config are not this schema.",
+      "description": "Optional layers. A fresh bootstrap writes every switch false. A config with no layers object keeps the 1.4.11 layers on, including githooks. Inside layers, missing or false stays off.",
       "additionalProperties": false,
       "properties": {
         "merge": { "type": "boolean" },

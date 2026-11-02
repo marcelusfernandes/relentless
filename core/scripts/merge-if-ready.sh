@@ -52,6 +52,15 @@ done
 RESOLVED="$(resolve_config "${CONFIG:-.relentless/config.json}" "$REPO" || true)"  # intentional fail-soft
 CONFIG="${RESOLVED:-}"
 
+# layers.merge false: do not merge. A missing config keeps the previous behavior.
+# No layers object means an install from before layers, so merge stays on.
+if [[ -n "$CONFIG" && -f "$CONFIG" ]]; then
+  if ! layer_enabled merge "$CONFIG"; then
+    echo "merge layer is off; merge:auto has no effect" >&2
+    exit 1
+  fi
+fi
+
 if [[ -z "$ISSUE" ]]; then
   ISSUE="$(gh pr view "$PR" --repo "$REPO" --json closingIssuesReferences -q '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)"  # intentional fail-soft
   if [[ -z "$ISSUE" ]]; then
@@ -628,29 +637,38 @@ if [[ "$DRY" -eq 1 ]]; then
 fi
 
 # One flag the repo allows. Merge commit when it is allowed, otherwise squash, otherwise rebase.
-# When the repo does not answer, keep a merge commit so older callers still merge.
+# If the repo's allowed methods cannot be read, exit. Never assume a merge commit.
 choose_merge_flag() {
-  local raw squash merge rebase
-  # intentional fail-soft: stubs and older gh answers fall through to a merge commit
-  raw="$(gh api "repos/${REPO}" --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}' 2>/dev/null || true)"
-  if printf '%s' "$raw" | jq -e 'type == "object" and has("allow_squash_merge")' >/dev/null 2>&1; then
-    merge="$(printf '%s' "$raw" | jq -r '.allow_merge_commit')"
-    squash="$(printf '%s' "$raw" | jq -r '.allow_squash_merge')"
-    rebase="$(printf '%s' "$raw" | jq -r '.allow_rebase_merge')"
-    if [[ "$merge" == "true" ]]; then
-      printf '%s%s' '--mer' 'ge'
-      return 0
-    fi
-    if [[ "$squash" == "true" ]]; then
-      printf '%s' '--squash'
-      return 0
-    fi
-    if [[ "$rebase" == "true" ]]; then
-      printf '%s' '--rebase'
-      return 0
-    fi
+  local raw err merge squash rebase
+  err="$(mktemp)"
+  if ! raw="$(gh api "repos/${REPO}" --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}' 2>"$err")"; then
+    echo "error: could not read allowed merge methods for ${REPO}: $(tr '\n' ' ' <"$err")" >&2
+    rm -f "$err"
+    exit 1
   fi
-  printf '%s%s' '--mer' 'ge'
+  if ! printf '%s' "$raw" | jq -e 'type == "object" and has("allow_merge_commit") and has("allow_squash_merge") and has("allow_rebase_merge")' >/dev/null 2>&1; then
+    echo "error: could not read allowed merge methods for ${REPO}: $(tr '\n' ' ' <"$err") ${raw}" >&2
+    rm -f "$err"
+    exit 1
+  fi
+  rm -f "$err"
+  merge="$(printf '%s' "$raw" | jq -r '.allow_merge_commit')"
+  squash="$(printf '%s' "$raw" | jq -r '.allow_squash_merge')"
+  rebase="$(printf '%s' "$raw" | jq -r '.allow_rebase_merge')"
+  if [[ "$merge" == "true" ]]; then
+    printf '%s\n' '--merge'
+    return 0
+  fi
+  if [[ "$squash" == "true" ]]; then
+    printf '%s\n' '--squash'
+    return 0
+  fi
+  if [[ "$rebase" == "true" ]]; then
+    printf '%s\n' '--rebase'
+    return 0
+  fi
+  echo "error: could not read allowed merge methods for ${REPO}: repo allows none" >&2
+  exit 1
 }
 
 # Retarget FIRST so --delete-branch cannot close dependents with base_ref_deleted

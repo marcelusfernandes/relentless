@@ -1,3 +1,4 @@
+# <!-- relentless:owned -->
 name = "reviewer"
 description = "Isolated read-only review; require ADR refs when area decided. Never writes issue state. Full brief: agents/reviewer.md"
 developer_instructions = """

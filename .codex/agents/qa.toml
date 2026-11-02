@@ -1,3 +1,4 @@
+# <!-- relentless:owned -->
 name = "qa"
 description = "Dogfood QA content for the orchestrator to post. Full brief: agents/qa.md"
 developer_instructions = """

@@ -1,3 +1,4 @@
+# <!-- relentless:owned -->
 name = "planner"
 description = "Milestone → epic → sub-issues; durable forks → proposed ADR; orchestrator requests the decision. Full brief: agents/planner.md"
 developer_instructions = """

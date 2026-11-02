@@ -6,6 +6,9 @@
 # Avoid false positives on docs/heredocs that merely *mention* approval or merge:
 # strip heredoc bodies before matching, and require command-like patterns.
 set -euo pipefail
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../core/scripts/lib/common.sh
+source "${HOOK_DIR}/../../core/scripts/lib/common.sh"
 
 INPUT="$(cat || true)"  # intentional: empty stdin ok
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // .command // empty' 2>/dev/null || true)"  # intentional fail-soft
@@ -163,6 +166,23 @@ if [[ "$is_implementer" -eq 1 ]]; then
   exit 0
 fi
 
+# Reviewer-side checks follow layers.review. The implementer block above does not.
+# Missing config keeps the checks (they were always on before layers).
+# No layers object keeps them on (1.4.11). Invalid JSON exits and names the file.
+review_layer_active() {
+  local top cfg
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"  # intentional fail-soft: not every cwd is a checkout
+  cfg=""
+  if [[ -n "$top" && -f "${top}/.relentless/config.json" ]]; then
+    cfg="${top}/.relentless/config.json"
+  elif [[ -f .relentless/config.json ]]; then
+    cfg="$(pwd)/.relentless/config.json"
+  else
+    return 0
+  fi
+  layer_enabled review "$cfg"
+}
+
 # Reviewer only. The gh allowlist star matches the rest of the command, so a
 # second method flag or --input still looks like an allowed GET. Deny those here.
 # One -X/--method, including with -f/-F, stays allowed. Other roles are unchanged.
@@ -170,7 +190,7 @@ is_reviewer=0
 if [[ "$ROLE" == "reviewer" || "$AGENT" == "reviewer" || "$AGENT" == *":reviewer" ]]; then
   is_reviewer=1
 fi
-if [[ "$is_reviewer" -eq 1 ]] && reviewer_gh_api_unsafe; then
+if [[ "$is_reviewer" -eq 1 ]] && review_layer_active && reviewer_gh_api_unsafe; then
   echo "[relentless] BLOCKED: reviewer gh api may use one -X/--method and must not pass --input." >&2
   exit 2
 fi

@@ -46,8 +46,11 @@ REPO_BASE="$(basename "$REPO")"
 PATH_OUT="${PATH_OUT:-${PARENT}/${REPO_BASE}-wt-${ISSUE}}"
 
 if [[ "$BASE_EXPLICIT" -eq 0 ]]; then
-  if [[ -f "${WORKDIR}/.relentless/config.json" ]]; then
-    BASE="$(jq -r '.base // empty' "${WORKDIR}/.relentless/config.json" 2>/dev/null || true)"  # intentional fail-soft: a broken config falls through to the repo
+  cfg="${WORKDIR}/.relentless/config.json"
+  if [[ -f "$cfg" ]]; then
+    # A broken file exits here. It must not fall through to gh repo view.
+    require_parsed_config "$cfg"
+    BASE="$(jq -r '.base // empty' "$cfg")"
   fi
   if [[ -z "$BASE" ]]; then
     BASE="$(gh repo view "$REPO" --json defaultBranchRef -q '.defaultBranchRef.name // empty' || true)"  # intentional fail-soft: the error is reported below

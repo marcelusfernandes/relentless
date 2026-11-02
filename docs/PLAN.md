@@ -59,7 +59,7 @@ Reusable agent-workflow plugin for **Claude Code** and **Codex**. New personal p
 | PR13 | Explicit named failure | include |
 
 ### Lateral
-- Hooks (generic stop-gate / protect-main): include, no proof checks  
+- Hooks (worktree write guard when that layer is on): include, no proof checks  
 - Ruleset script: opt-in, fail soft  
 - Domain skills, Notion “add product”, Product Upstream/BUS: **exclude**
 
@@ -217,11 +217,11 @@ Shipped against §1 inventory:
 | PR13 | Explicit named failure | yes — doctrine; scripts annotate intentional fail-soft |
 | PR14 | Follow-ups after review | yes — `follow-up-after-review.md` |
 | PR15 | Status snapshot | yes — template + `write-status-snapshot.sh` |
-| Hooks | stop-gate / protect-main / protect-worktree-write | yes |
+| Hooks | protect-worktree-write (worktrees layer). protect-main removed | yes |
 
 ## 14. v1.4.1 hook and decision guards (2026-10-31)
 
-- PreToolUse protect-main blocks every force-push spelling and commits aimed at main via `git -C` or `cd`.
+- PreToolUse protect-main was removed. Commits and pushes on main are the repo's branch protection and, when the githooks layer is on, `.relentless/githooks`.
 - `tests/hooks/` regression harness; CI runs it.
 - Setup installs consumer `pre-commit` / `pre-push` via `core.hooksPath` (chains husky, does not clobber). GitHub branch protection stays opt-in.
 - Human decisions: agents cannot run `decide.sh` / `accept-adr.sh`; Claude UserPromptSubmit records a typed `/decide`; Codex refuses without a TTY and tells the decider the exact terminal command. `merge-if-ready` refuses an accepted ADR with no decision-request comment.

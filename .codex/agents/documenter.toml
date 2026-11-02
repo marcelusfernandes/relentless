@@ -1,3 +1,4 @@
+# <!-- relentless:owned -->
 name = "documenter"
 description = "Status snapshots + decisions index at milestone close. No issue state writes. Full brief: agents/documenter.md"
 developer_instructions = """
