@@ -136,7 +136,10 @@ ROLE="${RELENTLESS_ROLE:-${CODEX_THREAD_ROLE:-}}"
 AGENT="${CLAUDE_AGENT:-${AGENT_NAME:-}}"
 
 # worktree-create writes this marker. The harness does not export a role into
-# the hook process, so the marker is the signal that reaches the hook.
+# the hook process, so an untracked marker is the signal that reaches the hook.
+# A tracked marker is on every checkout of that commit, including main, so it
+# is not a role signal. protect-worktree-write still treats a present file as
+# a worktree for path confinement; that check is not this role check.
 worktree_marker_at() {
   local dir="$1" top=""
   [[ -n "$dir" && -d "$dir" ]] || return 1
@@ -145,7 +148,11 @@ worktree_marker_at() {
   else
     return 1
   fi
-  [[ -f "$top/.relentless/worktree.json" ]]
+  [[ -f "$top/.relentless/worktree.json" ]] || return 1
+  if git -C "$top" ls-files --error-unmatch .relentless/worktree.json >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
 }
 
 in_implementer_worktree() {

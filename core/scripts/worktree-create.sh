@@ -122,7 +122,24 @@ if [[ -f "${WORKDIR}/.worktreeinclude" ]]; then
   done < "${WORKDIR}/.worktreeinclude"
 fi
 
-# Marker for hooks
+# Marker for hooks. Keep it out of commits: info/exclude is repo-local, not a
+# tracked .gitignore, and the common git dir is shared by every worktree.
+# A committed marker would sit on the orchestrator's main checkout.
+exclude_worktree_marker() {
+  local common="" exclude="" line=".relentless/worktree.json"
+  common="$(git -C "$PATH_OUT" rev-parse --git-common-dir)"
+  case "$common" in
+    /*) ;;
+    *) common="${PATH_OUT}/${common}" ;;
+  esac
+  exclude="${common}/info/exclude"
+  mkdir -p "${common}/info"
+  if [[ -f "$exclude" ]] && grep -qxF "$line" "$exclude"; then
+    return 0
+  fi
+  printf '%s\n' "$line" >>"$exclude"
+}
+
 mkdir -p "${PATH_OUT}/.relentless"
 cat > "${PATH_OUT}/.relentless/worktree.json" <<JSON
 {
@@ -133,6 +150,7 @@ cat > "${PATH_OUT}/.relentless/worktree.json" <<JSON
   "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSON
+exclude_worktree_marker
 
 echo "export RELENTLESS_WORKTREE=\"${PATH_OUT}\""
 echo "export RELENTLESS_ROLE=implementer"

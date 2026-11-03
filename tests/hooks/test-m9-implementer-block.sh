@@ -2,6 +2,8 @@
 # M9 — an implementer worktree cannot apply the verdict or merge.
 # The signal is .relentless/worktree.json, the marker worktree-create writes.
 # Neither case sets RELENTLESS_ROLE, CODEX_THREAD_ROLE, CLAUDE_AGENT, or AGENT_NAME.
+# A marker committed on the base is not a signal: gh pr merge from that main
+# checkout stays allowed. The untracked marker inside the worktree still blocks.
 # The hook script is the one both harnesses register. It is not stubbed.
 #
 # Real harness contract:
@@ -69,8 +71,25 @@ for pair in \
   "codex-main|$TMP/primary|$codex_env|core/scripts/apply-review-verdict.sh --pr 3 --verdict approved|0" \
   "codex-main|$TMP/primary|$codex_env|gh pr merge 3 --merge|0" \
   "claude-push|$TMP/wt|$claude_env|git push -u origin feat/9-login|0" \
-  "codex-push|$TMP/wt|$codex_env|git push -u origin feat/9-login|0"; do
+  "codex-push|$TMP/wt|$codex_env|git push -u origin feat/9-login|0" \
+  "claude-tracked-main|$TMP/primary|$claude_env|gh pr merge 3 --merge|0" \
+  "codex-tracked-main|$TMP/primary|$codex_env|gh pr merge 3 --merge|0"; do
   IFS='|' read -r name cwd envline command_text want <<<"$pair"
+  # Commit the marker on the base once, before the two main-checkout cases.
+  if [[ "$name" == "claude-tracked-main" ]]; then
+    mkdir -p "$TMP/primary/.relentless"
+    cat >"$TMP/primary/.relentless/worktree.json" <<JSON
+{
+  "issue": 1,
+  "branch": "main",
+  "base": "main",
+  "primary": "${TMP}/primary",
+  "created_at": "2026-11-03T00:00:00Z"
+}
+JSON
+    git -C "$TMP/primary" add .relentless/worktree.json
+    git -C "$TMP/primary" -c user.email=t@example.com -c user.name=Test commit -q -m marker
+  fi
   rc="$(run_hook "$cwd" "$envline" "$command_text")"
   if [[ "$rc" -eq "$want" ]]; then
     ok

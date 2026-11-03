@@ -26,6 +26,7 @@ jobs:
           bash tests/scripts/test-m4-reviewer-readonly.sh
           bash tests/scripts/test-m7-old-config.sh
           bash tests/hooks/test-m9-implementer-block.sh
+          bash tests/scripts/test-worktree-create-exclude.sh
           sudo apt-get update -qq && sudo apt-get install -y ripgrep
           bash tests/scripts/test-no-old-decision-refs.sh
 
@@ -74,6 +75,7 @@ jobs:
           bash tests/scripts/test-m4-reviewer-readonly.sh
           bash tests/scripts/test-m7-old-config.sh
           bash tests/hooks/test-m9-implementer-block.sh
+          bash tests/scripts/test-worktree-create-exclude.sh
           BASH32
 
       - name: Acceptance M1 M3 M5 M10 under bash 3.2
@@ -116,6 +118,7 @@ jobs:
           /bin/bash tests/scripts/test-m4-reviewer-readonly.sh
           /bin/bash tests/scripts/test-m7-old-config.sh
           /bin/bash tests/hooks/test-m9-implementer-block.sh
+          /bin/bash tests/scripts/test-worktree-create-exclude.sh
 
       - name: Acceptance M1 M3 M5 M10 on /bin/bash
         run: |
