@@ -23,6 +23,10 @@ jobs:
           bash tests/scripts/test-github-templates-yaml.sh
           bash tests/scripts/test-merge-mode.sh
           bash tests/scripts/test-bootstrap-additive.sh
+          bash tests/scripts/test-m4-reviewer-readonly.sh
+          bash tests/scripts/test-m7-old-config.sh
+          bash tests/hooks/test-m9-implementer-block.sh
+          bash tests/scripts/test-no-old-decision-refs.sh
 
       - name: Acceptance M1 M3 M5 M10
         run: |
@@ -66,6 +70,9 @@ jobs:
           bash tests/scripts/test-github-templates-yaml.sh
           bash tests/scripts/test-merge-mode.sh
           bash tests/scripts/test-bootstrap-additive.sh
+          bash tests/scripts/test-m4-reviewer-readonly.sh
+          bash tests/scripts/test-m7-old-config.sh
+          bash tests/hooks/test-m9-implementer-block.sh
           BASH32
 
       - name: Acceptance M1 M3 M5 M10 under bash 3.2
@@ -105,6 +112,9 @@ jobs:
           /bin/bash tests/scripts/test-github-templates-yaml.sh
           /bin/bash tests/scripts/test-merge-mode.sh
           /bin/bash tests/scripts/test-bootstrap-additive.sh
+          /bin/bash tests/scripts/test-m4-reviewer-readonly.sh
+          /bin/bash tests/scripts/test-m7-old-config.sh
+          /bin/bash tests/hooks/test-m9-implementer-block.sh
 
       - name: Acceptance M1 M3 M5 M10 on /bin/bash
         run: |

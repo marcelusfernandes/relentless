@@ -1,7 +1,8 @@
 <!-- relentless:owned -->
 # Layer: qa
 
-Read this when `layers.qa` is true.
+## Orchestrator
+- When the implementer reports ready, spawn a separate `qa` agent with the issue and its context, never the implementer's report. Put its report in the PR body with `fill-qa-section.sh`, then continue.
 
-- Spawn qa after the implementer reports ready and before review. The implementer never runs QA.
-- Put the qa report in the PR body with `fill-qa-section.sh`, then move the issue to `state:review`.
+## Implementer
+- Never run or write QA; the orchestrator owns it.

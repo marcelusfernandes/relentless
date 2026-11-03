@@ -4,7 +4,7 @@
 - **Date:** 2026-10-31 (America/Sao_Paulo)
 - **Issue:** #0
 - **Human gate:** required (`human:pending` → `/decide`)
-- **Decided by:** Marcelus
+- **Decider:** Marcelus
 
 ## Context
 Stacked PRs and shared checkouts caused agents to collide (dirty trees, wrong base branches, `base_ref_deleted` after merges). Lineage marvinz → apollo → lohra-ts proved one writer per worktree from a fresh copy of the repository default branch.

@@ -20,39 +20,20 @@ MAX_DO_NOT = 6
 # because Claude enforces them with hooks. They must still be in the TOML.
 CODEX_REQUIRED = {
     "orchestrator": [
-        "do not run /decide",
-        "decide.sh",
-        "accept-adr.sh",
-        "decided by",
-        "decider.name",
-        "own terminal",
-        "expected",
-        "do not retry",
-        "do not stall for a human",
         "state:review",
-        "merge-if-ready",
-        "do not self-review",
         "worktree",
         "main",
         "never force-push",
-        "run-isolated-review.sh",
         ".relentless/config.json",
-        "--harness",
     ],
     "planner": [
-        "do not run /decide",
-        "decide.sh",
-        "decided by",
         "proposed",
         "--status accepted",
-        "decider.name",
-        "own terminal",
         "human:pending",
         "do not implement",
         "main",
     ],
     "implementer": [
-        "own worktree",
         "state:review",
         "stop",
         "never commit",
@@ -61,15 +42,6 @@ CODEX_REQUIRED = {
         "self-review",
         "do not merge",
         "review:approved",
-        "decide.sh",
-        "accept-adr.sh",
-        "decided by",
-        "decider.name",
-        "own terminal",
-        "do not retry",
-        "origin/main",
-        "docs/decisions",
-        "adrs:",
         "stash",
         "uncommitted",
     ],
@@ -83,13 +55,10 @@ CODEX_REQUIRED = {
         "do not commit",
         "approved",
         "changes_requested",
-        "decide.sh",
-        "decided by",
-        "decider.name",
         "blocker",
-        "adrs:",
         "verdict rule",
         "follow-ups",
+        "decisions.md",
     ],
     "qa": [
         "dogfood",
@@ -100,10 +69,7 @@ CODEX_REQUIRED = {
         "docs/decisions",
         "do not merge",
         "main",
-        "decide.sh",
-        "decided by",
-        "decider.name",
-        "own terminal",
+        "human:pending",
     ],
     "documenter": [
         "milestone close",
@@ -112,10 +78,8 @@ CODEX_REQUIRED = {
         "readme",
         "review:approved",
         "human-gated",
-        "do not write decided by",
-        "decide.sh",
-        "decider.name",
         "main",
+        "human:pending",
     ],
 }
 
@@ -230,20 +194,11 @@ SENTENCE_PARITY = {
     "implementer": [
         "If wait-ci exits 4 (CI unavailable, quota), it is not a code failure: do not change code, do not retry CI, and do not run or report checks yourself. Report back ready for review and stop; the orchestrator sets state:review; merge-if-ready runs the checks on the PR head after review.",
     ],
-    "orchestrator": [
-        "If CI is red, read the failed job before touching code. If no test step ran (startup_failure, billing, spending limit, or minutes exhausted), it is not a code failure: do not change code, do not retry CI, and do not run or report checks yourself. Run merge-if-ready, which runs the checks on the PR head and decides. If it reports a local check failure, treat it as a normal test failure.",
-        "If `merge-if-ready` exits non-zero, never post its messages, apply merge labels or merge yourself. Run `request-decision.sh` on the issue with its output quoted as context, and stop.",
-        "Run the reviewer only through `run-isolated-review.sh`; never call it as a subagent.",
-        'Write to an ADR only after an explicit decision by `decider.name`, verified by the decide record on the linked issue. In one commit on the **same branch where the decision was taken**, rewrite `## Decision` with the current decision under "Decided YYYY-MM-DD (new decision)", append its line to `docs/decisions/log.jsonl`, and update `docs/decisions/README.md` if the ADR title or status changed. Never change `Status` or `Decided by`. Ship that commit with **that PR** — do not park the log on a separate branch, and do not defer it to a later orchestrator PR.',
-        "Append one line to `docs/decisions/log.jsonl` for every human decision (`human_decide`) and every binding decision of yours that closes or redirects work: `merge`, `auto_merge_no_ci`, `changes_requested`. Do **not** log routine `state_change` label flips. Each line is one JSON object with `ts`, `kind`, `from`, `to`, `issue`, `pr`, `adr`, `option`, `summary`, `decider`, `commit`; `decider` comes from `decider.name`; a missing value is null. Never rewrite a line; a correction is a new line citing the `ts` it corrects.",
-        "Record ADR rewrites and `human_decide` log lines **before** requesting isolated review (commits after `review:approved` invalidate the SHA-bound approval). For `merge` / `auto_merge_no_ci` / `changes_requested`, append the log line on the branch that owns that decision and push it with a real PR (never an orphan docs branch with no PR).",
-        "Before requesting a decision, fill in for every option what changes, what it affects (code, milestones, other ADRs), the risks, and the cost of reverting.",
-        "Only you write ADRs, `docs/decisions/log.jsonl`, and `docs/decisions/README.md`; start from that README to navigate decisions.",
-    ],
+    "orchestrator": [],
 }
 
-# The orchestrator owns merge-if-ready failures. The implementer stops at review.
-IMPLEMENTER_MUST_NOT = "If `merge-if-ready` exits non-zero, never post its messages, apply merge labels or merge yourself. Run `request-decision.sh` on the issue with its output quoted as context, and stop."
+# The implementer stops at review and does not take the merge step.
+IMPLEMENTER_MUST_NOT = "apply merge labels or merge yourself"
 
 
 def normalize_emphasis(text: str) -> str:
@@ -374,15 +329,19 @@ def main() -> int:
                 failures.append(f"  md={md_items}")
                 failures.append(f"  toml={toml_items}")
         if role == "reviewer":
+            # The script stays until PR 4. The brief no longer names it.
+            # The read-only tools line is still the same allowlist.
             script = (ROOT / "core/scripts/run-isolated-review.sh").read_text()
             allowed = reviewer_allowed_tools(script)
             tools = frontmatter_tools(md_text)
-            if not allowed:
-                failures.append("reviewer: REVIEWER_ALLOWED_TOOLS missing from run-isolated-review.sh")
-            elif tools != allowed:
+            if not tools or any(token in tools for token in ("Edit", "Write", "MultiEdit")):
+                failures.append(f"reviewer: tools frontmatter is not read-only: {tools!r}")
+            elif allowed and tools != allowed:
                 failures.append(
                     f"reviewer: tools frontmatter {tools!r} != REVIEWER_ALLOWED_TOOLS {allowed!r}"
                 )
+            if 'sandbox_mode = "read-only"' not in toml_path.read_text():
+                failures.append('reviewer: sandbox_mode = "read-only" missing from the TOML')
         for line in normative_lines(md_text):
             missing = [token for token in keywords(line) if token not in lowered and token not in normalized]
             # A paraphrase may drop a function word. Require the concrete tokens

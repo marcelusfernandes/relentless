@@ -4,7 +4,7 @@
 - **Date:** 2026-10-31 (America/Sao_Paulo)
 - **Issue:** #16
 - **Human gate:** required (`human:pending` → `/decide`)
-- **Decided by:** human
+- **Decider:** human
 
 ## Context
 Private and organization repositories have GitHub Actions minute limits. When the quota or spending limit is hit, jobs do not run (`startup_failure`, billing annotations, or a completed run with no steps). Treating that as a red test makes agents edit correct code and retry CI.

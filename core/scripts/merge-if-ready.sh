@@ -10,7 +10,7 @@
 # body has exactly one ADRs: line:
 #   ADRs: docs/decisions/adr/NNNN-slug.md[, …]   (each path must exist at the PR head)
 #   ADRs: none (<reason>)
-# An accepted ADR in the diff needs a decide.sh record on the linked issue or its
+# An accepted ADR in the diff needs a human record on the linked issue or its
 # native sub-issue parent (not body text, and not an issue cited only in the ADR).
 # Otherwise the script posts
 # "blocked: ADR accepted without a verified decision-request" and exits 1.
@@ -165,8 +165,8 @@ check_pr_adrs_line() {
   return 0
 }
 
-# decide.sh writes author=human for decider.name plus relentless:decision option=.
-# A decision-request marker, "Decided by" prose, or an agent comment is not enough.
+# The human record is author=human for decider.name plus relentless:decision option=.
+# A decision-request marker or an agent comment is not enough.
 # Issues named only inside the ADR are ignored: the agent writes that file.
 issue_has_verified_decision() {
   local num="$1" comments="" decider_name="" needle=""
@@ -224,14 +224,14 @@ EOF
   echo "blocked: ADR accepted without a verified decision-request" >&2
   echo "ADRs: $*" >&2
   echo "Issues checked: ${CHECKED_ISSUES[*]}" >&2
-  echo "Agents must not accept ADRs. The decider runs decide.sh in their own terminal, outside the agent session." >&2
+  echo "Agents must not accept ADRs. The human records the answer on the issue, outside the agent session." >&2
   if [[ "$DRY" -eq 0 ]]; then
     gh pr comment "$PR" --repo "$REPO" --body "$body"
   fi
   exit 1
 }
 
-# Accepted ADRs need a verified decide.sh record on the linked issue or its native sub-issue parent.
+# Accepted ADRs need a verified human record on the linked issue or its native sub-issue parent.
 check_accepted_adr_decision_requests() {
   local files="" rc=0 f="" b64="" text="" status="" parent=""
   local -a accepted=()
@@ -428,11 +428,16 @@ CI indisponível: cota do Actions esgotada
 ## Recommendation
 **Option 2** — a self-hosted runner is how to keep real CI. Decider: ${name}.
 EOF
-  if [[ -n "${CONFIG:-}" ]]; then
-    "${SCRIPT_DIR}/request-decision.sh" --repo "$REPO" --issue "$ISSUE" --body-file "$f" --config "$CONFIG"
-  else
-    "${SCRIPT_DIR}/request-decision.sh" --repo "$REPO" --issue "$ISSUE" --body-file "$f"
+  gh issue comment "$ISSUE" --repo "$REPO" --body-file "$f"
+  gh issue edit "$ISSUE" --repo "$REPO" --add-label "human:pending" || true  # intentional fail-soft
+  set_issue_state "$REPO" "$ISSUE" "state:blocked"
+  if [[ -n "${CONFIG:-}" && -f "$CONFIG" ]]; then
+    decider_gh="$(jq -r '.decider.github // empty' "$CONFIG")"
+    if [[ -n "$decider_gh" && "$decider_gh" != "null" ]]; then
+      gh issue edit "$ISSUE" --repo "$REPO" --add-assignee "$decider_gh" 2>/dev/null || true  # intentional fail-soft
+    fi
   fi
+  echo "Asked for a human decision on $REPO#$ISSUE (human:pending + state:blocked)"
   rm -f "$f"
   exit 4
 }

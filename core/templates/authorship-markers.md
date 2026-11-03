@@ -19,4 +19,4 @@ or
 
 The `decider` name comes from `.relentless/config.json` (`decider.name`), **not** from the GitHub account that posts the comment (accounts may be shared).
 
-`decide.sh` (run by the decider in their own terminal) or the Claude UserPromptSubmit hook posts the ☺️ comment with `author=human` and `decider.name`, even though the GitHub account is shared. Agents do not compose that comment themselves.
+The human's answer, or the Claude UserPromptSubmit hook, posts the ☺️ comment with `author=human` and `decider.name`, even though the GitHub account is shared. Agents do not compose that comment themselves.

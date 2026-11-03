@@ -121,8 +121,8 @@ What happens next (orchestrator-owned loop):
 
 You only step in for **human gates**:
 
-- **Claude:** type `/decide <issue> <option>` in the session (UserPromptSubmit hook records it).
-- **Codex:** `decide.sh` refuses inside the agent (expected). Run the **exact command it prints** in your own terminal, outside the agent session.
+- **Claude:** the human can type the option in the session (UserPromptSubmit hook records it).
+- **Codex:** the human answers on the issue, outside the agent session.
 
 Headless Claude (`claude -p`): set `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` so print mode does not kill long background waits — details in [`docs/harness-profiles.md`](docs/harness-profiles.md).
 
@@ -147,7 +147,7 @@ ls ~/.codex/plugins/cache/relentless/relentless/   # point RELENTLESS_ROOT at th
 
 ### 6. Troubleshooting
 
-- **`decide.sh` refuses inside the agent** — expected. Decider runs the printed command in their own terminal (Codex has no TTY for `/decide`).
+- **The agent will not record a human answer** — expected. The human answers on the issue (Codex has no TTY).
 - **CI fails with “unknown stack” / no test** — configure real checks in `.relentless/config.json` / `relentless-ci.yml` (bootstrap FAIL-closes until then).
 - **Stale Codex scripts** — cache is per version; `ls ~/.codex/plugins/cache/relentless/relentless/` and update `RELENTLESS_ROOT`.
 - **Missing `workflow` scope** — `gh auth refresh -s workflow`, then `bootstrap.sh --check-scopes`.
@@ -176,10 +176,10 @@ Setup then commits seeds on `chore/relentless-setup` and opens a PR (empty repos
 
 Agents use the same GitHub account as the decider, so they must not record decisions themselves.
 
-- Do not run `/decide`, `decide.sh`, or `accept-adr.sh`, and do not write `Decided by`. New ADRs stay **proposed**.
-- **Claude:** typing `/decide <issue> <option>` is handled by the UserPromptSubmit hook, which records the decision.
-- **Codex:** commands have no TTY, even in the interactive TUI. `decide.sh` refuses and prints the exact command. That refusal is expected. The decider runs it in their own terminal, outside the agent session. With the sandbox disabled, a process that can open its own terminal lowers but does not eliminate the risk.
-- If an issue is `human:pending`, post the decision request, tell the decider (`decider.name` in `.relentless/config.json`) that command, and move on. Do not retry.
+- New ADRs stay **proposed**. Agents never add `human:pending` or `human:decided` for the human, and they never record the human's answer.
+- **Claude:** the human's typed answer can be recorded by the UserPromptSubmit hook.
+- **Codex:** commands have no TTY, even in the interactive TUI. The human answers on the issue, outside the agent session.
+- If an issue is `human:pending`, the orchestrator has already posted the options. Move on to another ready issue. Do not retry.
 
 ### Hook tests
 

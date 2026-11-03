@@ -45,13 +45,9 @@ Use this exact structure in the issue comment whenever an agent applies `human:p
 **Option <N>** — <one or two sentences of agent reasoning.>
 
 ---
-Reply with the option number (e.g. `1`). The decider records it in their own terminal, outside the agent session:
+Reply with the option number (e.g. `1`). The human records it on the issue, outside the agent session.
 
-```bash
-core/scripts/decide.sh --repo OWNER/NAME --issue N --option <N>
-```
-
-On Claude, typing `/decide <issue> <option>` is enough (the UserPromptSubmit hook records it). Agents must not run `decide.sh`; a refusal is expected, not a broken lock.
+On Claude, a typed answer can be recorded by the UserPromptSubmit hook. Agents do not record the answer.
 ```
 
 Rules:
@@ -59,4 +55,4 @@ Rules:
 - Every option MUST have short pros and cons, what changes, what it affects (code, milestones, other ADRs), the risks, and the cost of reverting.
 - Always include an explicit recommendation with reasoning.
 - Do not apply `human:pending` without posting this template first (same comment or immediately before the label change).
-- Do not remove `human:pending` by deleting the label. The decider flips it to `human:decided` by running `decide.sh` outside the agent session (or by typing `/decide` on Claude).
+- Do not remove `human:pending` by deleting the label. The human's answer flips it to `human:decided`.

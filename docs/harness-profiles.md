@@ -18,7 +18,7 @@ codex exec \
   -C /path/to/workdir \
   < implementer-prompt.md
 ```
-Export `RELENTLESS_ROLE=implementer`. Hooks are not present in Codex; the implementer TOML still forbids `review:approved`, `merge-if-ready`, and `apply-review-verdict`, and `decide.sh` refuses when that role is set.
+Export `RELENTLESS_ROLE=implementer`. The implementer TOML forbids `review:approved`, `merge-if-ready`, and `apply-review-verdict`. Codex loads the same `hooks/hooks.json` as Claude through the plugin manifest.
 
 Prefer **Write / apply_patch** over huge `cat > file <<'EOF'` heredocs inside nested sessions — Codex shell classifiers can false-positive on heredoc bodies that look like dangerous commands.
 
@@ -111,16 +111,12 @@ Bootstrap `--harness claude|codex|both` (default `both`) only seeds `.codex/agen
 
 Agents share the human's GitHub identity. There is no marker file or env token that proves a human (the agent could write it).
 
-- **Claude:** typing `/decide <issue> <option>` runs `hooks/scripts/userprompt-decide.sh` (UserPromptSubmit). The hook records the decision. The agent does not call `decide.sh`.
-- **Codex:** commands have no TTY, even in the interactive TUI, so the human cannot confirm `/decide` from inside a Codex session. `decide.sh` and `accept-adr.sh` refuse and print the exact command. That refusal is expected behavior, not a broken lock. Do not retry or try another route. The decider runs it in their own terminal, outside the agent session:
+- **Claude:** a UserPromptSubmit hook can record a typed answer from the human. The agent does not record it.
+- **Codex:** commands have no TTY, even in the interactive TUI. The human answers on the issue, outside the agent session.
 
-```bash
-core/scripts/decide.sh --repo OWNER/NAME --issue N --option K
-```
+`merge-if-ready` posts `blocked: ADR accepted without a verified decision-request` and exits non-zero, without merging, when the diff has an accepted ADR and neither the linked issue nor its native sub-issue parent has a human record (`relentless:author=human` for `decider.name` and `relentless:decision`). Body lines such as `Parent:` / `Epic:` / `Part of #N`, and an issue cited only inside the ADR, do not count. `merge:auto` and `merge:human` both stop.
 
-With the sandbox disabled, a process that allocates its own terminal lowers but does not eliminate the risk. `merge-if-ready` posts `blocked: ADR accepted without a verified decision-request` and exits non-zero, without merging, when the diff has an accepted ADR and neither the linked issue nor its native sub-issue parent has a `decide.sh` record (`relentless:author=human` for `decider.name` and `relentless:decision`). Body lines such as `Parent:` / `Epic:` / `Part of #N`, and an issue cited only inside the ADR, do not count. `merge:auto` and `merge:human` both stop.
-
-If the issue has `human:pending`, post the decision request, tell the decider (`decider.name` from config, not a hardcoded person) that command, and move on to another ready issue.
+If the issue has `human:pending`, move on to another ready issue. The human answers on the issue.
 
 ## Git hooks in the consumer repo
 

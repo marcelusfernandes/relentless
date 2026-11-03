@@ -1,0 +1,30 @@
+{
+  "decider": {
+    "name": "Marcelus",
+    "github": "marcelusfernandes"
+  },
+  "workers": {
+    "default": {
+      "github": "marcelusfernandes"
+    }
+  },
+  "merge": {
+    "default": "human",
+    "allow_issue_override": true
+  },
+  "rulesets": {
+    "apply": false
+  },
+  "milestones": {
+    "require_outcome_section": true
+  },
+  "stack": "unknown",
+  "package_manager": null,
+  "checks": {
+    "install": "",
+    "lint": "",
+    "typecheck": "",
+    "test": "",
+    "build": ""
+  }
+}

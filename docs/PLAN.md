@@ -81,9 +81,9 @@ Artifacts: `core/templates/milestone-outcome.md`, skill `milestone-guard`, `core
 Flow:
 
 1. Agent drafts comment from **`core/templates/decision-request.md`** (question, context, numbered options with pros/cons, recommendation).
-2. `core/scripts/request-decision.sh` (or `/request-decision`) posts it, adds `human:pending` + `state:blocked`, assigns `decider.github`.
+2. The orchestrator posts it, adds `human:pending` + `state:blocked`, and assigns `decider.github`.
 3. Human replies with an option number.
-4. `/decide` / `core/scripts/decide.sh` posts ☺️ relayed-decision marker, flips `human:pending` → `human:decided`, clears blocked, sets `state:todo`, reassigns worker.
+4. The human's answer posts the ☺️ marker, flips `human:pending` → `human:decided`, clears blocked, sets `state:todo`, and reassigns the worker.
 
 Doctrine (`AGENTS.md`) and skill `human-gate` both require the template.
 
@@ -104,11 +104,11 @@ Skill `dogfood-qa`; agent `qa`. Structured QA section on issue/PR. No provas run
 marketplace/marketplace.json
 agents/{planner,implementer,qa}.md
 skills/{bootstrap,human-gate,issue-lifecycle,milestone-guard,pr-merge-gate,dogfood-qa}/SKILL.md
-commands/{decide,bootstrap,request-decision}.md
+commands/{decide,bootstrap}.md
 hooks/hooks.json
 core/labels/labels.json
 core/templates/{decision-request,authorship-markers,issue-body,milestone-outcome}.md
-core/scripts/{bootstrap,decide,request-decision,check-milestone-outcomes}.sh
+core/scripts/{bootstrap,check-milestone-outcomes}.sh
 core/schemas/{config.schema.json,config.example.json}
 AGENTS.md
 docs/PLAN.md
@@ -209,7 +209,7 @@ Shipped against §1 inventory:
 | ID | Practice | In tree |
 |----|----------|---------|
 | PR1–3,5,7,11,16 | Issue/milestone/epic/human-gate/review-merge/labels/dogfood | yes (prior) |
-| PR4 | Decision records | yes — `docs/decisions/`, templates, `new-adr`/`accept-adr`/`decide --adr`, bootstrap seed, dogfood ADR 0001–0002 |
+| PR4 | Decision records | yes — `docs/decisions/`, templates, `new-adr`, bootstrap seed, dogfood ADR 0001–0002 |
 | PR6 | Named roles | yes — orchestrator + documenter + existing |
 | PR9 | Worktree per writer | yes — skill + create/cleanup + hooks + implementer briefs |
 | PR10 | Conventional commits + Closes #N | yes — doctrine + `check-commit-msg.sh` |
@@ -224,7 +224,7 @@ Shipped against §1 inventory:
 - PreToolUse protect-main was removed. Commits and pushes on main are the repo's branch protection and, when the githooks layer is on, `.relentless/githooks`.
 - `tests/hooks/` regression harness; CI runs it.
 - Setup installs consumer `pre-commit` / `pre-push` via `core.hooksPath` (chains husky, does not clobber). GitHub branch protection stays opt-in.
-- Human decisions: agents cannot run `decide.sh` / `accept-adr.sh`; Claude UserPromptSubmit records a typed `/decide`; Codex refuses without a TTY and tells the decider the exact terminal command. `merge-if-ready` refuses an accepted ADR with no decision-request comment.
+- Human decisions: agents do not record the human's answer. Claude's UserPromptSubmit hook can record a typed answer. Codex has no TTY. `merge-if-ready` refuses an accepted ADR with no human record on the issue.
 
 ## 15. Future evolution — native issue dependencies
 

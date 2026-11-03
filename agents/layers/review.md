@@ -1,8 +1,11 @@
 <!-- relentless:owned -->
 # Layer: review
 
-Read this when `layers.review` is true.
+## Orchestrator
+- When the work is ready (after QA when `layers.qa` is true), set `state:review` and spawn the `reviewer` subagent in a fresh context. Give it the issue and PR numbers and the issue's context; never the implementer's reasoning, chat, or report.
+- You may steer the reviewer with questions about the issue or the diff, never with arguments for approval.
+- Apply its verdict with `apply-review-verdict.sh`. The reviewer never applies labels.
+- On `changes_requested`, set `state:in-progress` and resume the same implementer on the same branch; review again after its next push.
 
-- Pass the issue to the reviewer subagent, read the verdict, and you may guide the reviewer. Then run `apply-review-verdict`. The reviewer does not apply labels.
-- The reviewer reads the diff with `gh pr diff`, skipping lockfiles. Do not use `run-isolated-review`.
-- On round 2, address every blocker and major in the latest `relentless:review-verdict` before pushing.
+## Implementer
+- On round 2, read the latest `relentless:review-verdict` comment on the PR, address every blocker and major before pushing, and reply to each one in the PR.

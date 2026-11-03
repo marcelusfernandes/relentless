@@ -1,7 +1,9 @@
 <!-- relentless:owned -->
 # Layer: worktrees
 
-Read this when `layers.worktrees` is true.
+## Orchestrator
+- One writer per worktree. Create each implementer's branch and worktree with `worktree-create.sh`, which runs `gh issue develop`; never share a checkout across parallel implementers.
+- Remove a worktree only after its PR is merged.
 
-- One writer per worktree. Never share a checkout across parallel implementers.
-- Create it with `worktree-create`. The branch comes from `gh issue develop`. If that fails, stop and show the error.
+## Implementer
+- Work only inside the worktree you were given, with `RELENTLESS_ROLE=implementer` and `RELENTLESS_WORKTREE` set to it.
