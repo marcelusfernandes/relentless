@@ -128,5 +128,44 @@ else
     "${role_line:-missing}" "${agent_line:-missing}" "${claude_line:-missing}"
 fi
 
+# Broken config must fail closed (exit 2). Exit 1 does not block PreToolUse.
+BAD="$TMP/badcfg"
+git -C "$TMP" init -q -b feat/1-x badcfg
+git -C "$BAD" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+mkdir -p "$BAD/.relentless"
+printf '%s\n' '{bad' >"$BAD/.relentless/config.json"
+
+wt_err="$(
+  cd "$BAD" && jq -n --arg cwd "$BAD" --arg f /etc/x '{cwd:$cwd, tool_input:{file_path:$f}}' |
+    env RELENTLESS_ROLE=implementer bash "$ROOT/hooks/scripts/pretool-protect-worktree-write.sh" >/dev/null 2>&1
+  echo $?
+)"
+wt_msg="$(
+  cd "$BAD" && jq -n --arg cwd "$BAD" --arg f /etc/x '{cwd:$cwd, tool_input:{file_path:$f}}' |
+    env RELENTLESS_ROLE=implementer bash "$ROOT/hooks/scripts/pretool-protect-worktree-write.sh" 2>&1 >/dev/null || true
+)"
+if [[ "$wt_err" -eq 2 && "$wt_msg" == *"error: ${BAD}/.relentless/config.json failed to parse:"* ]]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  printf 'FAIL protect-worktree bad config rc=%s msg=%s\n' "$wt_err" "$wt_msg"
+fi
+
+rv_err="$(
+  cd "$BAD" && jq -n --arg c 'gh api -X POST --input body.json' '{tool_input:{command:$c}}' |
+    env RELENTLESS_ROLE=reviewer bash "$ROOT/hooks/scripts/pretool-reviewer-isolation.sh" >/dev/null 2>&1
+  echo $?
+)"
+rv_msg="$(
+  cd "$BAD" && jq -n --arg c 'gh api -X POST --input body.json' '{tool_input:{command:$c}}' |
+    env RELENTLESS_ROLE=reviewer bash "$ROOT/hooks/scripts/pretool-reviewer-isolation.sh" 2>&1 >/dev/null || true
+)"
+if [[ "$rv_err" -eq 2 && "$rv_msg" == *"error: ${BAD}/.relentless/config.json failed to parse:"* ]]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  printf 'FAIL reviewer-isolation bad config rc=%s msg=%s\n' "$rv_err" "$rv_msg"
+fi
+
 echo "pass=$PASS fail=$FAIL"
 [[ $FAIL -eq 0 ]]

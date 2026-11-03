@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
-# M9 — with layers.review on, an implementer cannot apply the verdict or merge.
+# M9 — an implementer worktree cannot apply the verdict or merge.
+# The signal is .relentless/worktree.json, the marker worktree-create writes.
+# Neither case sets RELENTLESS_ROLE, CODEX_THREAD_ROLE, CLAUDE_AGENT, or AGENT_NAME.
 # The hook script is the one both harnesses register. It is not stubbed.
 #
 # Real harness contract:
 # - hooks/hooks.json command (Claude plugin.json and Codex .codex-plugin/plugin.json
 #   and plugin.json com.openai.hooks all point at this file):
 #   bash "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-.}}/hooks/scripts/pretool-reviewer-isolation.sh"
-# - The hook reads RELENTLESS_ROLE, else CODEX_THREAD_ROLE, plus CLAUDE_AGENT and AGENT_NAME.
-# - The worktrees layer sets RELENTLESS_ROLE=implementer and RELENTLESS_WORKTREE.
+# - Claude sets CLAUDE_PLUGIN_ROOT. Codex sets PLUGIN_ROOT.
 #
 # Simulated (no Claude or Codex process is started):
-# - Claude stdin is the PreToolUse shape this hook parses: tool_input.command,
-#   plus hook_event_name and tool_name.
-# - Codex uses the same registered command. This repo does not record a second
-#   payload schema, so the Codex case sends the same tool_input.command object
-#   and sets PLUGIN_ROOT plus CODEX_THREAD_ROLE (RELENTLESS_ROLE unset) so the
-#   hook's Codex role variable is what identifies the implementer.
+# - The live proof in each harness is the hexgym run, not this CI test.
+# - Stdin is the PreToolUse shape this hook parses (tool_input.command plus cwd).
+# - The worktree marker is written the same way worktree-create writes it.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TMP="$(mktemp -d)"
@@ -32,45 +30,54 @@ if [[ "$cmd" != *'pretool-reviewer-isolation.sh'* ]]; then
   exit 1
 fi
 
-git -C "$TMP" init -q -b develop repo
-git -C "$TMP/repo" -c user.email=t@example.com -c user.name=Test commit -q --allow-empty -m init
-mkdir -p "$TMP/repo/.relentless"
-printf '%s\n' '{"layers":{"review":true,"worktrees":true}}' >"$TMP/repo/.relentless/config.json"
+git -C "$TMP" init -q -b main primary
+git -C "$TMP/primary" -c user.email=t@example.com -c user.name=Test commit -q --allow-empty -m init
+git -C "$TMP/primary" worktree add -q -b feat/9-login "$TMP/wt" HEAD
+mkdir -p "$TMP/wt/.relentless"
+cat >"$TMP/wt/.relentless/worktree.json" <<JSON
+{
+  "issue": 9,
+  "branch": "feat/9-login",
+  "base": "main",
+  "primary": "${TMP}/primary",
+  "created_at": "2026-11-03T00:00:00Z"
+}
+JSON
 
-run_hook() { # env-prefix command-string
-  local envline="$1" command_text="$2"
-  local payload
-  payload="$(jq -n --arg c "$command_text" '{hook_event_name:"PreToolUse", tool_name:"Bash", tool_input:{command:$c}}')"
+run_hook() { # cwd env-prefix command-string
+  local cwd="$1" envline="$2" command_text="$3" payload
+  payload="$(jq -n --arg c "$command_text" --arg cwd "$cwd" \
+    '{hook_event_name:"PreToolUse", tool_name:"Bash", cwd:$cwd, tool_input:{command:$c}}')"
   (
-    cd "$TMP/repo"
-    printf '%s' "$payload" | env $envline bash -c "$cmd" >/dev/null 2>&1
+    cd "$cwd" && printf '%s' "$payload" | env \
+      -u RELENTLESS_ROLE -u CODEX_THREAD_ROLE -u CLAUDE_AGENT -u AGENT_NAME \
+      $envline bash -c "$cmd" >/dev/null 2>&1
     echo $?
   )
 }
 
-claude_env="CLAUDE_PLUGIN_ROOT=$ROOT RELENTLESS_ROLE=implementer RELENTLESS_WORKTREE=$TMP/repo"
-codex_env="-u CLAUDE_PLUGIN_ROOT PLUGIN_ROOT=$ROOT CODEX_THREAD_ROLE=implementer RELENTLESS_WORKTREE=$TMP/repo"
+claude_env="CLAUDE_PLUGIN_ROOT=$ROOT"
+codex_env="-u CLAUDE_PLUGIN_ROOT PLUGIN_ROOT=$ROOT"
 
 for pair in \
-  "claude|$claude_env|core/scripts/apply-review-verdict.sh --pr 3 --verdict approved" \
-  "claude|$claude_env|gh pr merge 3 --squash" \
-  "codex|$codex_env|core/scripts/apply-review-verdict.sh --pr 3 --verdict approved" \
-  "codex|$codex_env|gh pr merge 3 --merge"; do
-  IFS='|' read -r harness envline command_text <<<"$pair"
-  rc="$(run_hook "$envline" "$command_text")"
-  if [[ "$rc" -eq 2 ]]; then
+  "claude-wt|$TMP/wt|$claude_env|core/scripts/apply-review-verdict.sh --pr 3 --verdict approved|2" \
+  "claude-wt|$TMP/wt|$claude_env|gh pr merge 3 --squash|2" \
+  "codex-wt|$TMP/wt|$codex_env|core/scripts/apply-review-verdict.sh --pr 3 --verdict approved|2" \
+  "codex-wt|$TMP/wt|$codex_env|gh pr merge 3 --merge|2" \
+  "claude-main|$TMP/primary|$claude_env|core/scripts/apply-review-verdict.sh --pr 3 --verdict approved|0" \
+  "claude-main|$TMP/primary|$claude_env|gh pr merge 3 --squash|0" \
+  "codex-main|$TMP/primary|$codex_env|core/scripts/apply-review-verdict.sh --pr 3 --verdict approved|0" \
+  "codex-main|$TMP/primary|$codex_env|gh pr merge 3 --merge|0" \
+  "claude-push|$TMP/wt|$claude_env|git push -u origin feat/9-login|0" \
+  "codex-push|$TMP/wt|$codex_env|git push -u origin feat/9-login|0"; do
+  IFS='|' read -r name cwd envline command_text want <<<"$pair"
+  rc="$(run_hook "$cwd" "$envline" "$command_text")"
+  if [[ "$rc" -eq "$want" ]]; then
     ok
   else
-    bad "M9 $harness '$command_text' exited $rc, want 2"
+    bad "M9 $name '$command_text' exited $rc, want $want"
   fi
 done
-
-rc="$(run_hook "$claude_env" "git push -u origin feat/1-x")"
-if [[ "$rc" -eq 0 ]]; then
-  ok
-else
-  bad "M9 claude git push should stay allowed, exited $rc"
-fi
 
 echo "pass=$PASS fail=$FAIL"
 [[ $FAIL -eq 0 ]]
