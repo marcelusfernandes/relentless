@@ -1,11 +1,11 @@
 {
   "decider": {
-    "name": "Marcelus",
-    "github": "marcelusfernandes"
+    "name": "Example User",
+    "github": "example-user"
   },
   "workers": {
     "default": {
-      "github": "marcelusfernandes"
+      "github": "example-user"
     }
   },
   "merge": {

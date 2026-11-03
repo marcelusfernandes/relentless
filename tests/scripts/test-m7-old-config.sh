@@ -4,7 +4,7 @@
 # - v1.4.11-config.example.json is core/schemas/config.example.json from ee722b8
 # - claude-1.4.11.json is teste-relentless-claude @1393c94
 # - codex-1.4.11.json is Teste-relentless @98a6b71
-# GitHub logins in the two repo fixtures are example-user.
+# Person names are "Example User" and GitHub logins are example-user.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TMP="$(mktemp -d)"
@@ -105,9 +105,10 @@ exercise() { # label fixture
   fi
 }
 
-for fixture in "$ROOT/tests/fixtures/m7/claude-1.4.11.json" "$ROOT/tests/fixtures/m7/codex-1.4.11.json"; do
-  if grep -q 'marcelusfernandes' "$fixture"; then
-    bad "M7 $(basename "$fixture") still has a GitHub login"
+for fixture in "$ROOT/tests/fixtures/m7/v1.4.11-config.example.json" \
+  "$ROOT/tests/fixtures/m7/claude-1.4.11.json" "$ROOT/tests/fixtures/m7/codex-1.4.11.json"; do
+  if grep -q 'marcelusfernandes\|Marcelus' "$fixture"; then
+    bad "M7 $(basename "$fixture") still has a person name or GitHub login"
   else
     ok
   fi
