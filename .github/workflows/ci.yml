@@ -26,6 +26,7 @@ jobs:
           bash tests/scripts/test-m4-reviewer-readonly.sh
           bash tests/scripts/test-m7-old-config.sh
           bash tests/hooks/test-m9-implementer-block.sh
+          sudo apt-get update -qq && sudo apt-get install -y ripgrep
           bash tests/scripts/test-no-old-decision-refs.sh
 
       - name: Acceptance M1 M3 M5 M10
