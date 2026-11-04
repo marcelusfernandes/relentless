@@ -17,7 +17,7 @@ Apollo-style **issue-mãe** first; lohra-ts native `sub_issues` for children. En
 2. **Parent epic** in that milestone (`create-epic.sh`) containing:
    - Product outcome + deliverable + exit criterion / validates-with + depends-on
    - **Understanding** (problem/context before breaking down)
-   - **Decisions fixed for this wave** (human forks: report options; the orchestrator runs `request-decision.sh` and applies `human:pending`)
+   - **Decisions fixed for this wave** (human forks: report options, impacts, and a recommendation; the orchestrator asks and applies `human:pending`)
    - **Decomposition plan (waves)** and dependencies
 3. **Only then** create sub-issues (`create-issue.sh --parent N` or `add-sub-issue.sh`).
 4. Sub-issues that are still too big for one session/PR become **nested epics** with their own sub-issues.

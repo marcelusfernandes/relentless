@@ -121,8 +121,8 @@ What happens next (orchestrator-owned loop):
 
 You only step in for **human gates**:
 
-- **Claude:** type `/decide <issue> <option>` in the session (UserPromptSubmit hook records it).
-- **Codex:** `decide.sh` refuses inside the agent (expected). Run the **exact command it prints** in your own terminal, outside the agent session.
+- **Claude:** the human can type the option in the session (UserPromptSubmit hook records it).
+- **Codex:** the human answers on the issue, outside the agent session.
 
 Headless Claude (`claude -p`): set `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` so print mode does not kill long background waits — details in [`docs/harness-profiles.md`](docs/harness-profiles.md).
 
@@ -147,7 +147,7 @@ ls ~/.codex/plugins/cache/relentless/relentless/   # point RELENTLESS_ROOT at th
 
 ### 6. Troubleshooting
 
-- **`decide.sh` refuses inside the agent** — expected. Decider runs the printed command in their own terminal (Codex has no TTY for `/decide`).
+- **The agent will not record a human answer** — expected. The human answers on the issue (Codex has no TTY).
 - **CI fails with “unknown stack” / no test** — configure real checks in `.relentless/config.json` / `relentless-ci.yml` (bootstrap FAIL-closes until then).
 - **Stale Codex scripts** — cache is per version; `ls ~/.codex/plugins/cache/relentless/relentless/` and update `RELENTLESS_ROOT`.
 - **Missing `workflow` scope** — `gh auth refresh -s workflow`, then `bootstrap.sh --check-scopes`.
@@ -163,10 +163,10 @@ Installing the plugin alone is not enough. Prefer **Getting started → Set up**
 
 | Piece | Behavior |
 |-------|----------|
-| **Config** | Writes `.relentless/config.json` only when it is missing: `base`, the merge methods the repo allows, `checks.test` from the repo's own workflow, and `layers.*` all false. An existing config is not edited. |
-| **AGENTS.md / CLAUDE.md** | Upserts a `<!-- relentless:start -->` … `<!-- relentless:end -->` block. |
+| **Config** | Writes `.relentless/config.json` when it is missing: `base`, the merge methods the repo allows, `checks.test` from the repo's own workflow, and `layers.*` all false. An existing config is kept. `checks.test` is filled from the repo workflow only when that field is absent or empty. |
+| **AGENTS.md / CLAUDE.md** | Upserts a `<!-- relentless:start -->` … `<!-- relentless:end -->` block. The wave ends at `state:review`. Each enabled layer adds one line. The checks table shows the config's commands. |
 | **Labels** | Creates missing core labels only (`state:*`, `human:pending`, `human:decided`, `epic`). Never edits an existing label. |
-| **Layers** | CI, issue templates, githooks, and decision files are written only when `layers.<name>` is already true. A fresh bootstrap leaves them off and does not touch an existing workflow, template, or `.codex` file. |
+| **Layers** | A fresh bootstrap leaves every layer off. A config with no `layers` key keeps the 1.4.11 layers on, including githooks. Inside `layers`, a switch runs only when it is true. Enabled layer files are copied to `.relentless/layers/`. A file that still has the `relentless:owned` marker is refreshed; a file without it is left as the repo wrote it. `merge:auto` has no effect while `layers.merge` is off: `merge-if-ready` exits with `merge layer is off; merge:auto has no effect` and does not merge. |
 | **Branch protection** | **Off** unless you pass `--branch-protection` after an explicit yes in setup. Fail-soft if the token cannot admin the repo. On Codex without a sandbox the git hooks are advisory (`git push --no-verify` or `git -c core.hooksPath=/dev/null ...`); branch protection is the only hard lock on `main` there. |
 | **Actions minutes** | Private and organization repositories have GitHub Actions minute limits. When the quota or spending limit is exhausted, `merge-if-ready` runs the configured checks locally on the PR head and notes the result on the PR. With `merge:auto`, if those checks pass and the head SHA is stable, it may merge without a human. `merge:human` still waits for a person. A self-hosted runner is how to keep real Actions CI. With no test command, the issue stops at `human:pending` and nothing is merged. |
 
@@ -176,10 +176,10 @@ Setup then commits seeds on `chore/relentless-setup` and opens a PR (empty repos
 
 Agents use the same GitHub account as the decider, so they must not record decisions themselves.
 
-- Do not run `/decide`, `decide.sh`, or `accept-adr.sh`, and do not write `Decided by`. New ADRs stay **proposed**.
-- **Claude:** typing `/decide <issue> <option>` is handled by the UserPromptSubmit hook, which records the decision.
-- **Codex:** commands have no TTY, even in the interactive TUI. `decide.sh` refuses and prints the exact command. That refusal is expected. The decider runs it in their own terminal, outside the agent session. With the sandbox disabled, a process that can open its own terminal lowers but does not eliminate the risk.
-- If an issue is `human:pending`, post the decision request, tell the decider (`decider.name` in `.relentless/config.json`) that command, and move on. Do not retry.
+- New ADRs stay **proposed**. Agents never add `human:pending` or `human:decided` for the human, and they never record the human's answer.
+- **Claude:** the human's typed answer can be recorded by the UserPromptSubmit hook.
+- **Codex:** commands have no TTY, even in the interactive TUI. The human answers on the issue, outside the agent session.
+- If an issue is `human:pending`, the orchestrator has already posted the options. Move on to another ready issue. Do not retry.
 
 ### Hook tests
 
@@ -205,7 +205,7 @@ Ask the agent for a product outcome (see [Getting started → First product requ
   --milestone "Theme: subtitle" --type enhancement --parent N --label merge:auto
 ```
 
-Implement → QA → **stop at `state:review`** → isolated reviewer → `apply-review-verdict` → **`merge-if-ready`**.
+Implement → **stop at `state:review`**. QA, review, and merge run only when those layers are on. A `merge:auto` label does nothing while `layers.merge` is off.
 
 Harness profiles: **`docs/harness-profiles.md`**. Plan / backlog: **`docs/PLAN.md`**.
 

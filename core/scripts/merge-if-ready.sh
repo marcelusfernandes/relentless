@@ -10,7 +10,7 @@
 # body has exactly one ADRs: line:
 #   ADRs: docs/decisions/adr/NNNN-slug.md[, …]   (each path must exist at the PR head)
 #   ADRs: none (<reason>)
-# An accepted ADR in the diff needs a decide.sh record on the linked issue or its
+# An accepted ADR in the diff needs a human record on the linked issue or its
 # native sub-issue parent (not body text, and not an issue cited only in the ADR).
 # Otherwise the script posts
 # "blocked: ADR accepted without a verified decision-request" and exits 1.
@@ -51,6 +51,15 @@ done
 
 RESOLVED="$(resolve_config "${CONFIG:-.relentless/config.json}" "$REPO" || true)"  # intentional fail-soft
 CONFIG="${RESOLVED:-}"
+
+# layers.merge false: do not merge. A missing config keeps the previous behavior.
+# No layers object means an install from before layers, so merge stays on.
+if [[ -n "$CONFIG" && -f "$CONFIG" ]]; then
+  if ! layer_enabled merge "$CONFIG"; then
+    echo "merge layer is off; merge:auto has no effect" >&2
+    exit 1
+  fi
+fi
 
 if [[ -z "$ISSUE" ]]; then
   ISSUE="$(gh pr view "$PR" --repo "$REPO" --json closingIssuesReferences -q '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)"  # intentional fail-soft
@@ -156,8 +165,8 @@ check_pr_adrs_line() {
   return 0
 }
 
-# decide.sh writes author=human for decider.name plus relentless:decision option=.
-# A decision-request marker, "Decided by" prose, or an agent comment is not enough.
+# The human record is author=human for decider.name plus relentless:decision option=.
+# A decision-request marker or an agent comment is not enough.
 # Issues named only inside the ADR are ignored: the agent writes that file.
 issue_has_verified_decision() {
   local num="$1" comments="" decider_name="" needle=""
@@ -215,14 +224,14 @@ EOF
   echo "blocked: ADR accepted without a verified decision-request" >&2
   echo "ADRs: $*" >&2
   echo "Issues checked: ${CHECKED_ISSUES[*]}" >&2
-  echo "Agents must not accept ADRs. The decider runs decide.sh in their own terminal, outside the agent session." >&2
+  echo "Agents must not accept ADRs. The human records the answer on the issue, outside the agent session." >&2
   if [[ "$DRY" -eq 0 ]]; then
     gh pr comment "$PR" --repo "$REPO" --body "$body"
   fi
   exit 1
 }
 
-# Accepted ADRs need a verified decide.sh record on the linked issue or its native sub-issue parent.
+# Accepted ADRs need a verified human record on the linked issue or its native sub-issue parent.
 check_accepted_adr_decision_requests() {
   local files="" rc=0 f="" b64="" text="" status="" parent=""
   local -a accepted=()
@@ -419,11 +428,16 @@ CI indisponível: cota do Actions esgotada
 ## Recommendation
 **Option 2** — a self-hosted runner is how to keep real CI. Decider: ${name}.
 EOF
-  if [[ -n "${CONFIG:-}" ]]; then
-    "${SCRIPT_DIR}/request-decision.sh" --repo "$REPO" --issue "$ISSUE" --body-file "$f" --config "$CONFIG"
-  else
-    "${SCRIPT_DIR}/request-decision.sh" --repo "$REPO" --issue "$ISSUE" --body-file "$f"
+  gh issue comment "$ISSUE" --repo "$REPO" --body-file "$f"
+  gh issue edit "$ISSUE" --repo "$REPO" --add-label "human:pending" || true  # intentional fail-soft
+  set_issue_state "$REPO" "$ISSUE" "state:blocked"
+  if [[ -n "${CONFIG:-}" && -f "$CONFIG" ]]; then
+    decider_gh="$(jq -r '.decider.github // empty' "$CONFIG")"
+    if [[ -n "$decider_gh" && "$decider_gh" != "null" ]]; then
+      gh issue edit "$ISSUE" --repo "$REPO" --add-assignee "$decider_gh" 2>/dev/null || true  # intentional fail-soft
+    fi
   fi
+  echo "Asked for a human decision on $REPO#$ISSUE (human:pending + state:blocked)"
   rm -f "$f"
   exit 4
 }
@@ -628,29 +642,38 @@ if [[ "$DRY" -eq 1 ]]; then
 fi
 
 # One flag the repo allows. Merge commit when it is allowed, otherwise squash, otherwise rebase.
-# When the repo does not answer, keep a merge commit so older callers still merge.
+# If the repo's allowed methods cannot be read, exit. Never assume a merge commit.
 choose_merge_flag() {
-  local raw squash merge rebase
-  # intentional fail-soft: stubs and older gh answers fall through to a merge commit
-  raw="$(gh api "repos/${REPO}" --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}' 2>/dev/null || true)"
-  if printf '%s' "$raw" | jq -e 'type == "object" and has("allow_squash_merge")' >/dev/null 2>&1; then
-    merge="$(printf '%s' "$raw" | jq -r '.allow_merge_commit')"
-    squash="$(printf '%s' "$raw" | jq -r '.allow_squash_merge')"
-    rebase="$(printf '%s' "$raw" | jq -r '.allow_rebase_merge')"
-    if [[ "$merge" == "true" ]]; then
-      printf '%s%s' '--mer' 'ge'
-      return 0
-    fi
-    if [[ "$squash" == "true" ]]; then
-      printf '%s' '--squash'
-      return 0
-    fi
-    if [[ "$rebase" == "true" ]]; then
-      printf '%s' '--rebase'
-      return 0
-    fi
+  local raw err merge squash rebase
+  err="$(mktemp)"
+  if ! raw="$(gh api "repos/${REPO}" --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}' 2>"$err")"; then
+    echo "error: could not read allowed merge methods for ${REPO}: $(tr '\n' ' ' <"$err")" >&2
+    rm -f "$err"
+    exit 1
   fi
-  printf '%s%s' '--mer' 'ge'
+  if ! printf '%s' "$raw" | jq -e 'type == "object" and has("allow_merge_commit") and has("allow_squash_merge") and has("allow_rebase_merge")' >/dev/null 2>&1; then
+    echo "error: could not read allowed merge methods for ${REPO}: $(tr '\n' ' ' <"$err") ${raw}" >&2
+    rm -f "$err"
+    exit 1
+  fi
+  rm -f "$err"
+  merge="$(printf '%s' "$raw" | jq -r '.allow_merge_commit')"
+  squash="$(printf '%s' "$raw" | jq -r '.allow_squash_merge')"
+  rebase="$(printf '%s' "$raw" | jq -r '.allow_rebase_merge')"
+  if [[ "$merge" == "true" ]]; then
+    printf '%s\n' '--merge'
+    return 0
+  fi
+  if [[ "$squash" == "true" ]]; then
+    printf '%s\n' '--squash'
+    return 0
+  fi
+  if [[ "$rebase" == "true" ]]; then
+    printf '%s\n' '--rebase'
+    return 0
+  fi
+  echo "error: could not read allowed merge methods for ${REPO}: repo allows none" >&2
+  exit 1
 }
 
 # Retarget FIRST so --delete-branch cannot close dependents with base_ref_deleted

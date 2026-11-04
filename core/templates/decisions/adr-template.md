@@ -4,7 +4,7 @@
 - **Date:** YYYY-MM-DD (America/Sao_Paulo)
 - **Issue:** #
 - **Human gate:** required (`human:pending` → `/decide`)
-- **Decided by:** _(filled by `/decide`)_
+- **Decider:** _(filled when the human answers)_
 
 ## Context
 What forces the decision? Constraints, prior art, dogfood friction.

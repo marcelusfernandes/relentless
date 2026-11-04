@@ -219,13 +219,23 @@ layer_review() {
   write_config "$repo" review
   core_still_runs review
   boot_layer "$repo" review
+  # The implementer block stays on when layers.review is false (M9).
   payload="$(jq -n --arg c 'core/scripts/apply-review-verdict.sh --pr 3 --verdict approved' '{tool_input:{command:$c}}')"
   rc="$(cd "$repo" && printf '%s' "$payload" | env RELENTLESS_ROLE=implementer \
+    bash "$ROOT/hooks/scripts/pretool-reviewer-isolation.sh" >/dev/null 2>&1; echo $?)"
+  if [[ "$rc" -eq 2 ]]; then
+    ok
+  else
+    bad "M3 review: pretool-reviewer-isolation.sh exited ${rc} for an implementer apply-review-verdict while layers.review is false; the implementer block stays on"
+  fi
+  # Reviewer-side checks do nothing when the layer is off.
+  payload="$(jq -n --arg c 'gh api -X GET foo -X POST' '{tool_input:{command:$c}}')"
+  rc="$(cd "$repo" && printf '%s' "$payload" | env RELENTLESS_ROLE=reviewer \
     bash "$ROOT/hooks/scripts/pretool-reviewer-isolation.sh" >/dev/null 2>&1; echo $?)"
   if [[ "$rc" -eq 0 ]]; then
     ok
   else
-    bad "M3 review: pretool-reviewer-isolation.sh exited ${rc} for an implementer apply-review-verdict while layers.review is false; a disabled layer hook must exit 0"
+    bad "M3 review: reviewer-side check exited ${rc} while layers.review is false; a disabled layer hook must exit 0"
   fi
   assert_briefs_clean review 'apply-review-verdict' 'run-isolated-review' 'round 2'
 }

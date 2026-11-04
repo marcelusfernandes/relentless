@@ -1,0 +1,31 @@
+{
+  "decider": {
+    "name": "Example User",
+    "github": "example-user"
+  },
+  "workers": {
+    "default": {
+      "github": "example-user"
+    }
+  },
+  "merge": {
+    "default": "auto",
+    "allow_issue_override": true
+  },
+  "rulesets": {
+    "apply": true
+  },
+  "milestones": {
+    "require_outcome_section": true
+  },
+  "stack": "node",
+  "package_manager": "npm",
+  "checks": {
+    "install": "npm ci",
+    "lint": "",
+    "typecheck": "npm run typecheck",
+    "test": "npm run test",
+    "build": "npm run build"
+  },
+  "harness": "claude"
+}

@@ -6,6 +6,35 @@ set -euo pipefail
 
 payload="$(cat || true)"  # intentional: empty stdin ok
 
+# layers.githooks false: do nothing. A missing file, or a config with no layers
+# object, keeps the check (1.4.11 installed these hooks). Invalid JSON exits
+# and names the file. It must not be treated as layers-off.
+githooks_layer_off() {
+  local top cfg err has val
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"  # intentional fail-soft: not every cwd is a checkout
+  cfg=""
+  if [[ -n "$top" && -f "${top}/.relentless/config.json" ]]; then
+    cfg="${top}/.relentless/config.json"
+  elif [[ -f .relentless/config.json ]]; then
+    cfg="$(pwd)/.relentless/config.json"
+  fi
+  [[ -n "$cfg" ]] || return 1
+  if ! err="$(jq empty "$cfg" 2>&1)"; then
+    echo "error: ${cfg} failed to parse: ${err}" >&2
+    exit 1
+  fi
+  has="$(jq -r 'has("layers")' "$cfg")"
+  if [[ "$has" != "true" ]]; then
+    return 1
+  fi
+  val="$(jq -r '.layers.githooks // false' "$cfg")"
+  [[ "$val" != "true" ]]
+}
+
+if githooks_layer_off; then
+  exit 0
+fi
+
 branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"  # intentional fail-soft: detached HEAD is not main/master
 
 if [[ "$branch" == "main" || "$branch" == "master" ]]; then

@@ -4,7 +4,7 @@
 - **Date:** 2026-10-31 (America/Sao_Paulo)
 - **Issue:** #0
 - **Human gate:** required (`human:pending` → `/decide`)
-- **Decided by:** Marcelus
+- **Decider:** Marcelus
 
 ## Context
 Stacked PRs and shared checkouts caused agents to collide (dirty trees, wrong base branches, `base_ref_deleted` after merges). Lineage marvinz → apollo → lohra-ts proved one writer per worktree from a fresh copy of the repository default branch.
@@ -24,7 +24,7 @@ Stacked PRs and shared checkouts caused agents to collide (dirty trees, wrong ba
 - Cons: stale bases; easy to commit on wrong branch (rejected)
 
 ## Decision
-Option 1 accepted on 2026-10-31. Skill worktree-segura; scripts worktree-create/cleanup; hooks protect-main + protect-worktree-write + stop-gate.
+Option 1 accepted on 2026-10-31. Skill worktree-segura; scripts worktree-create/cleanup; hook protect-worktree-write when the worktrees layer is on. The protect-main hook was removed; the repo's branch protection and the githooks layer are the lock. There is no Stop hook.
 
 
 ## Consequences

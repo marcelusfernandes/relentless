@@ -50,9 +50,9 @@ Every workflow comment:
 - Human / relayed decision: leading `☺️` + `<!-- relentless:author=human decider="<decider.name>" -->`
 
 ## Human decisions
-When moving an issue to `human:pending`, the agent **must** comment using **`core/templates/decision-request.md`**. Skills: `human-gate`. Command: `/request-decision`.
+When moving an issue to `human:pending`, the orchestrator comments with the question, the options, and a recommendation (`core/templates/decision-request.md`, skill `human-gate`), then moves on. Workers report what needs deciding. They never add `human:pending` or `human:decided`.
 
-Agents **do not** run `/decide`, `decide.sh`, or `accept-adr.sh`, and do not write `Decided by`. ADRs are created **proposed**. If the issue has `human:pending`, post the request, tell the decider (`decider.name`, not a hardcoded person) the exact `decide.sh --repo OWNER/NAME --issue N --option K` command for their own terminal, and move on to another ready issue. A `decide.sh` refusal is expected. Do not retry or try other routes. "Do not stall for a human" applies to agent handoffs (review, merge), not to human decisions. Claude records a typed `/decide` in the UserPromptSubmit hook. Codex has no TTY, even in the interactive TUI; the human runs `decide.sh` outside the session.
+The human answers on the issue and the label becomes `human:decided`. Agents do not record that answer. ADRs are created **proposed**. Outside the orchestrator's list of human waits, do not pause for a human.
 
 ## Orchestrator loop (implement → review → merge)
 
@@ -140,7 +140,7 @@ core/scripts/bootstrap.sh --repo OWNER/NAME --workdir PATH \
   --merge-default human --decider Marcelus --harness claude --apply
 ```
 
-Bootstrap adds only a missing `.relentless/config.json` (repo `base`, allowed merge methods, and checks), the docs block, and missing core labels. It does not edit an existing config, label, template, workflow, or `.codex` file. CI, templates, githooks, and decisions run only when `layers.<name>` is already true. **Never** vendor plugin `agents/`/`skills/`.
+Bootstrap adds a missing `.relentless/config.json` (repo `base`, allowed merge methods, checks, and every layer false), the docs block, and missing core labels. It fills `checks.test` only when that field is absent or empty. A config with no `layers` key keeps the 1.4.11 layers on, including githooks. A `.codex` brief or `.relentless/layers` file is refreshed only while it still has the `relentless:owned` marker. **Never** vendor plugin `agents/`/`skills/`.
 
 ## Plugin install (do not copy agents/skills)
 - **Claude (prefer project scope):** `claude plugin install relentless@relentless --scope project -y` after `marketplace add` — writes `.claude/settings.json` `enabledPlugins` so collaborators are prompted.
@@ -155,14 +155,14 @@ Bootstrap adds only a missing `.relentless/config.json` (repo `base`, allowed me
 - **Read `docs/decisions/` before planning or implementing.**
 - **ADR** (`docs/decisions/adr/NNNN-<slug>.md`): architecture / public contract / durable product rule. **Human gate required.** Silence ≠ approval.
 - **Note** (`docs/decisions/notes/YYYY-MM-DD-<slug>.md`): measured intentional behavior; no human gate.
-- Flow: proposed ADR → `request-decision` → the **decider** runs `/decide` (Claude hook) or `decide.sh --adr` in their own terminal → Status **accepted**, **Decided by**, issue comment links ADR. Agents never write that acceptance.
-- Helpers: `new-adr.sh`, `accept-adr.sh`, `decide.sh`.
+- Flow: proposed ADR → the orchestrator asks on the issue → the human answers and the label becomes `human:decided` → Status **accepted**. Agents never write that acceptance.
+- Helper: `new-adr.sh` (always proposed).
 - Reviewer: PRs touching a decided area **must** reference the ADR path.
 
 ## Worktree per writer (PR9)
 - Skill `worktree-segura`; scripts `worktree-create.sh` / `worktree-cleanup.sh`.
 - Branch `<type>/<n>-<slug>` from the repo base branch (`base` in `.relentless/config.json`) only. Remote push = lock.
-- Hooks: `pretool-protect-main`, `pretool-protect-worktree-write` (Claude). There is no Stop hook. The implementer brief requires passing tests and a commit before report back. Codex honors the same rules in agent briefs (no Stop hooks).
+- Hooks: `pretool-protect-worktree-write` when `layers.worktrees` is on (Claude). There is no Stop hook and no `pretool-protect-main`. The implementer brief requires passing tests and a commit before report back. Codex honors the same rules in agent briefs (no Stop hooks).
 - Consumer git hooks (`.relentless/githooks`, via `core.hooksPath` or chained onto husky) refuse commits and pushes to main/master and force-pushes. On Codex without a sandbox those hooks are advisory, since an agent can bypass them with `git push --no-verify` or `git -c core.hooksPath=/dev/null ...`, so branch protection is the only hard lock on `main` there. GitHub branch protection stays off unless setup was explicitly told yes.
 
 ## Conventional commits (PR10)
@@ -185,10 +185,9 @@ Project scripts must not swallow errors with bare `|| true` / redirected-away st
 
 ## Protect hooks
 - There is no Stop hook. Before report back, the implementer brief requires passing tests and no uncommitted work (commit a checkpoint; do not stash). QA checks what slips through.
-- `pretool-protect-main.sh`: no commit/push on main (including `git -C` / `cd` onto another checkout); no force-push (`-f`, `--force`, `--force-with-lease`, `+refspec`) / reset --hard / clean -f.
-- `pretool-gh-workflow.sh`: an agent role cannot invoke `decide.sh`, `accept-adr.sh`, or `new-adr.sh --status accepted`.
+- `pretool-protect-worktree-write.sh`: implementer writes stay inside the worktree when `layers.worktrees` is on. Commits and pushes on main are the repo's branch protection and, when `layers.githooks` is on, `.relentless/githooks`.
+- `pretool-gh-workflow.sh`: an agent role cannot record a human decision or mark an ADR accepted. `new-adr.sh --status accepted` stays blocked.
 - Run `bash tests/hooks/test-hooks.sh`, `tests/hooks/test-decide-guard.sh`, and `tests/hooks/test-githooks.sh`.
-- `pretool-protect-worktree-write.sh`: implementer writes stay inside the worktree.
 
 ## Out of scope / deferred
 - Product Upstream / BUS port; Proof (provas)

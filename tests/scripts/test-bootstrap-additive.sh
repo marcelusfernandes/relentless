@@ -30,7 +30,11 @@ cat >"$REPO_DIR/.relentless/config.json" <<'JSON'
     "test": "pnpm run test:unit && pnpm exec playwright test",
     "build": "pnpm run build"
   },
-  "hexgym": { "studio": "lipe", "note": "do not clobber" }
+  "hexgym": { "studio": "lipe", "note": "do not clobber" },
+  "layers": {
+    "merge": false, "review": false, "qa": false, "worktrees": false,
+    "decisions": false, "templates": false, "ci": false, "githooks": false, "docs": false
+  }
 }
 JSON
 printf '%s\n' '{"scripts":{"test":"vitest","lint":"eslint","build":"vite build"}}' >"$REPO_DIR/package.json"

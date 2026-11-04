@@ -23,18 +23,19 @@ jobs:
           bash tests/scripts/test-github-templates-yaml.sh
           bash tests/scripts/test-merge-mode.sh
           bash tests/scripts/test-bootstrap-additive.sh
+          bash tests/scripts/test-m4-reviewer-readonly.sh
+          bash tests/scripts/test-m7-old-config.sh
+          bash tests/hooks/test-m9-implementer-block.sh
+          bash tests/scripts/test-worktree-create-exclude.sh
+          sudo apt-get update -qq && sudo apt-get install -y ripgrep
+          bash tests/scripts/test-no-old-decision-refs.sh
 
-      # M1, M5, and M10 are the core. M3 stays non-blocking until the layer
-      # files and disabled-layer hooks land (PR 3).
-      - name: Acceptance M1 M5 M10
+      - name: Acceptance M1 M3 M5 M10
         run: |
           bash tests/scripts/test-m1-bootstrap-leaves-consumer.sh
+          bash tests/scripts/test-m3-layers-off.sh
           bash tests/scripts/test-m5-repo-wins.sh
           bash tests/scripts/test-m10-issue-develop.sh
-
-      - name: Acceptance M3 (layers, non-blocking until PR 3)
-        continue-on-error: true
-        run: bash tests/scripts/test-m3-layers-off.sh
 
   # Every pull request. The image is Alpine with bash 3.2; do not apk add bash.
   bash32:
@@ -71,9 +72,13 @@ jobs:
           bash tests/scripts/test-github-templates-yaml.sh
           bash tests/scripts/test-merge-mode.sh
           bash tests/scripts/test-bootstrap-additive.sh
+          bash tests/scripts/test-m4-reviewer-readonly.sh
+          bash tests/scripts/test-m7-old-config.sh
+          bash tests/hooks/test-m9-implementer-block.sh
+          bash tests/scripts/test-worktree-create-exclude.sh
           BASH32
 
-      - name: Acceptance M1 M5 M10 under bash 3.2
+      - name: Acceptance M1 M3 M5 M10 under bash 3.2
         run: |
           docker run --rm -i \
             -v "$PWD:/work" \
@@ -85,23 +90,9 @@ jobs:
           bash --version | grep -q 'version 3.2'
           git config --global --add safe.directory /work
           bash tests/scripts/test-m1-bootstrap-leaves-consumer.sh
+          bash tests/scripts/test-m3-layers-off.sh
           bash tests/scripts/test-m5-repo-wins.sh
           bash tests/scripts/test-m10-issue-develop.sh
-          BASH32
-
-      - name: Acceptance M3 under bash 3.2 (layers, non-blocking until PR 3)
-        continue-on-error: true
-        run: |
-          docker run --rm -i \
-            -v "$PWD:/work" \
-            -w /work \
-            bash:3.2 \
-            sh -s <<'BASH32'
-          set -u
-          apk add --no-cache jq git
-          bash --version | grep -q 'version 3.2'
-          git config --global --add safe.directory /work
-          bash tests/scripts/test-m3-layers-off.sh
           BASH32
 
   # Stock macOS bash and BSD tools. Release PRs only; macos-latest is billed apart from Linux.
@@ -124,13 +115,14 @@ jobs:
           /bin/bash tests/scripts/test-github-templates-yaml.sh
           /bin/bash tests/scripts/test-merge-mode.sh
           /bin/bash tests/scripts/test-bootstrap-additive.sh
+          /bin/bash tests/scripts/test-m4-reviewer-readonly.sh
+          /bin/bash tests/scripts/test-m7-old-config.sh
+          /bin/bash tests/hooks/test-m9-implementer-block.sh
+          /bin/bash tests/scripts/test-worktree-create-exclude.sh
 
-      - name: Acceptance M1 M5 M10 on /bin/bash
+      - name: Acceptance M1 M3 M5 M10 on /bin/bash
         run: |
           /bin/bash tests/scripts/test-m1-bootstrap-leaves-consumer.sh
+          /bin/bash tests/scripts/test-m3-layers-off.sh
           /bin/bash tests/scripts/test-m5-repo-wins.sh
           /bin/bash tests/scripts/test-m10-issue-develop.sh
-
-      - name: Acceptance M3 on /bin/bash (layers, non-blocking until PR 3)
-        continue-on-error: true
-        run: /bin/bash tests/scripts/test-m3-layers-off.sh

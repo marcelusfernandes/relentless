@@ -359,6 +359,11 @@ if [[ "$1" == "api" ]]; then
     cat "$GH_API_BODY"
     exit 0
   fi
+  # The repo allows a merge commit, so merge-if-ready can choose --merge from the answer.
+  if [[ "$*" == *"allow_merge_commit"* || "$*" == *"allow_squash_merge"* || "$*" == *"allow_rebase_merge"* ]]; then
+    printf '%s\n' '{"allow_merge_commit":true,"allow_squash_merge":true,"allow_rebase_merge":false}'
+    exit 0
+  fi
   echo '[]'
   exit 0
 fi

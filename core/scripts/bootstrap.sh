@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # bootstrap.sh — add what a consumer repo is missing: config, the docs block,
-# and core labels. Layers (CI, templates, githooks, decisions, review, qa, docs)
-# run only when layers.<name> is true. A fresh bootstrap writes every switch false.
-# Default dry-run. An existing config, label, template, workflow, or .codex file
-# is never edited.
+# and core labels. Layers run when layers.<name> is true. A fresh bootstrap
+# writes every switch false. A config with no layers object keeps the 1.4.11
+# layers on, including githooks. Default dry-run.
+# An existing label, template, or workflow is not edited. checks.test is filled
+# only when that field is absent or empty. A relentless-owned file
+# (.codex/agents/*.toml, .relentless/layers/<layer>.md) is refreshed only when
+# it still carries the relentless:owned marker. A file without the marker is
+# never touched.
 set -euo pipefail
 
 REPO="" APPLY=0 CONFIG="" WORKDIR="" SEED_FILES=1
@@ -40,8 +44,9 @@ Usage: $(basename "$0") --repo OWNER/NAME [options]
 
 A new config records the repo default branch (base), the merge methods the
 repo allows, and checks.test from the repo's own workflow. layers.* start
-false. CI, templates, githooks, and decisions run only when that layer is
-already true in an existing config.
+false. A config with no layers object keeps every 1.4.11 layer on. Inside
+layers, a switch runs only when it is true. checks.test is filled from the
+repo workflow only when the field is absent or empty.
 USAGE
 }
 
@@ -97,20 +102,28 @@ fi
 CONFIG_EXISTED=0
 if [[ -n "$CONFIG" && -f "$CONFIG" ]]; then
   CONFIG_EXISTED=1
+  # A broken file stops here. It must not be treated as layers-off.
+  require_parsed_config "$CONFIG"
 fi
 
-# True only when an existing config sets layers.<name> to true.
-# A missing config, a missing key, or false stays off. Upgrade defaults are later.
+# True when the layer runs. See layer_enabled: missing file is off, no layers
+# object is on (1.4.11, including githooks), and invalid JSON exits.
 layer_on() {
-  local name="$1" cfg="" val
+  local name="$1" cfg=""
   if [[ -n "$CONFIG" && -f "$CONFIG" ]]; then
     cfg="$CONFIG"
   elif [[ -n "$WORKDIR" && -f "${WORKDIR}/.relentless/config.json" ]]; then
     cfg="${WORKDIR}/.relentless/config.json"
   fi
-  [[ -n "$cfg" ]] || return 1
-  val="$(jq -r --arg n "$name" '.layers[$n] // false' "$cfg" 2>/dev/null || echo false)"
-  [[ "$val" == "true" ]]
+  layer_enabled "$name" "$cfg"
+}
+
+active_config() {
+  if [[ -n "$CONFIG" && -f "$CONFIG" ]]; then
+    printf '%s\n' "$CONFIG"
+  elif [[ -n "$WORKDIR" && -f "${WORKDIR}/.relentless/config.json" ]]; then
+    printf '%s\n' "${WORKDIR}/.relentless/config.json"
+  fi
 }
 
 # Single-line `run:` steps. Prefer a command that mentions test.
@@ -248,6 +261,85 @@ seed_copy() {
   fi
 }
 
+# Write checks.test from the repo workflow only when that field is absent or empty.
+# A value the repo already set is left alone. Other config fields are not rewritten.
+fill_empty_checks() {
+  local dest="$1" detected current tmp
+  [[ -n "$dest" && -f "$dest" ]] || return 0
+  detected="$(read_repo_test_command "$WORKDIR")"
+  [[ -n "$detected" ]] || return 0
+  current="$(jq -r '.checks.test // empty' "$dest")"
+  [[ -z "$current" ]] || return 0
+  echo "config fill: checks.test from the repo workflow"
+  if [[ "$APPLY" -eq 1 ]]; then
+    tmp="$(mktemp)"
+    jq --arg t "$detected" '.checks = (.checks // {}) | .checks.test = $t' "$dest" >"$tmp"
+    mv "$tmp" "$dest"
+  fi
+}
+
+# The only place a relentless-owned file is refreshed.
+# .codex/agents/*.toml and .relentless/layers/<layer>.md are rewritten only when
+# the consumer file still carries the relentless:owned marker. A file without
+# that marker was edited by the repo and is never touched.
+refresh_owned() {
+  local src="$1" dest_rel="$2" dest
+  if [[ -z "$WORKDIR" ]]; then
+    echo "skipped: ${dest_rel} (needs --workdir)"
+    return 0
+  fi
+  dest="${WORKDIR}/${dest_rel}"
+  if [[ ! -e "$dest" ]]; then
+    echo "skipped: ${dest_rel} (absent)"
+    return 0
+  fi
+  if [[ ! -f "$src" ]]; then
+    echo "skipped: ${dest_rel} (no source)"
+    return 0
+  fi
+  if grep -q 'relentless:owned' "$dest"; then
+    if [[ "$APPLY" -eq 1 ]]; then
+      cp "$src" "$dest"
+      echo "refreshed: ${dest_rel}"
+    else
+      echo "refreshed (dry-run): ${dest_rel}"
+    fi
+  else
+    echo "skipped: ${dest_rel}"
+  fi
+}
+
+copy_layer_file() {
+  local name="$1" src rel
+  src="${SCRIPT_DIR}/../../agents/layers/${name}.md"
+  rel=".relentless/layers/${name}.md"
+  if [[ -z "$WORKDIR" ]]; then
+    echo "seed (needs --workdir): ${rel}"
+    return 0
+  fi
+  if [[ ! -e "${WORKDIR}/${rel}" ]]; then
+    seed_copy "$src" "$rel"
+  else
+    refresh_owned "$src" "$rel"
+  fi
+}
+
+# Core agents are refreshed when present and marked, and are not created.
+# Layer agents are created only when that layer is on.
+refresh_codex_agent() {
+  local agent="$1" layer="${2:-}" src rel
+  src="${SCRIPT_DIR}/../../.codex/agents/${agent}.toml"
+  rel=".codex/agents/${agent}.toml"
+  [[ -f "$src" ]] || return 0
+  if [[ -n "$WORKDIR" && -e "${WORKDIR}/${rel}" ]]; then
+    refresh_owned "$src" "$rel"
+    return 0
+  fi
+  if [[ -n "$layer" ]] && layer_on "$layer"; then
+    seed_copy "$src" "$rel"
+  fi
+}
+
 if [[ "$SEED_FILES" -eq 0 ]]; then
   echo "seed: skipped (--no-seed-files)"
   echo "== done ($MODE) =="
@@ -260,6 +352,7 @@ if [[ -n "$WORKDIR" ]]; then
   dest_cfg="${WORKDIR}/.relentless/config.json"
   if [[ -f "$dest_cfg" || "$CONFIG_EXISTED" -eq 1 ]]; then
     echo "config: kept existing ${CONFIG:-$dest_cfg}"
+    fill_empty_checks "${CONFIG:-$dest_cfg}"
   elif [[ "$APPLY" -eq 1 ]]; then
     write_fresh_config "$dest_cfg"
     CONFIG="$dest_cfg"
@@ -287,9 +380,28 @@ while IFS= read -r row; do
 done < <(jq -c '.labels[]' "$LABELS_FILE")
 
 if [[ -n "$WORKDIR" ]]; then
-  test_for_docs="$(read_repo_test_command "$WORKDIR")"
-  agents_block="$(render_relentless_agents_block "$MERGE_DEFAULT" "$HARNESS" "repo" "" "" "" "$test_for_docs" "")"
-  claude_block="$(render_relentless_claude_block "$MERGE_DEFAULT" "$HARNESS" "repo" "$test_for_docs")"
+  cfg_docs="$(active_config)"
+  doc_install=""
+  doc_lint=""
+  doc_type=""
+  doc_test=""
+  doc_build=""
+  enabled=""
+  if [[ -n "$cfg_docs" ]]; then
+    doc_install="$(jq -r '.checks.install // empty' "$cfg_docs")"
+    doc_lint="$(jq -r '.checks.lint // empty' "$cfg_docs")"
+    doc_type="$(jq -r '.checks.typecheck // empty' "$cfg_docs")"
+    doc_test="$(jq -r '.checks.test // empty' "$cfg_docs")"
+    doc_build="$(jq -r '.checks.build // empty' "$cfg_docs")"
+  fi
+  for layer_name in merge review qa worktrees decisions templates ci githooks docs; do
+    if layer_on "$layer_name"; then
+      enabled="${enabled} ${layer_name}"
+    fi
+  done
+  enabled="${enabled# }"
+  agents_block="$(render_relentless_agents_block "$MERGE_DEFAULT" "$HARNESS" "repo" "$doc_install" "$doc_lint" "$doc_type" "$doc_test" "$doc_build" "$enabled")"
+  claude_block="$(render_relentless_claude_block "$MERGE_DEFAULT" "$HARNESS" "repo" "$doc_test")"
   if [[ "$APPLY" -eq 1 ]]; then
     upsert_relentless_block "${WORKDIR}/AGENTS.md" "$agents_block"
     upsert_relentless_block "${WORKDIR}/CLAUDE.md" "$claude_block"
@@ -321,16 +433,18 @@ else
 fi
 
 if layer_on ci; then
-  # shellcheck source=lib/detect-stack.sh
-  source "${SCRIPT_DIR}/lib/detect-stack.sh"
-  # shellcheck source=lib/render-ci.sh
-  source "${SCRIPT_DIR}/lib/render-ci.sh"
-  if [[ -n "$WORKDIR" && -d "$WORKDIR" ]]; then
-    detect_stack "$WORKDIR"
-  fi
+  ci_cfg="$(active_config)"
   if [[ -n "$WORKDIR" && -f "${WORKDIR}/.github/workflows/relentless-ci.yml" ]]; then
     echo "seed skip (exists): .github/workflows/relentless-ci.yml"
+  elif [[ "$CONFIG_EXISTED" -eq 1 && -n "$ci_cfg" ]] && ! jq -e 'has("layers")' "$ci_cfg" >/dev/null; then
+    # 1.4.11 did not recreate a workflow the repo had removed.
+    echo "seed skip (existing install, workflow absent): .github/workflows/relentless-ci.yml"
   elif [[ "$SCOPE_OK" -eq 1 && -n "$WORKDIR" ]]; then
+    # shellcheck source=lib/detect-stack.sh
+    source "${SCRIPT_DIR}/lib/detect-stack.sh"
+    # shellcheck source=lib/render-ci.sh
+    source "${SCRIPT_DIR}/lib/render-ci.sh"
+    detect_stack "$WORKDIR"
     echo "seed write: .github/workflows/relentless-ci.yml (stack=${STACK:-unknown})"
     if [[ "$APPLY" -eq 1 ]]; then
       render_relentless_ci_to_file "${WORKDIR}/.github/workflows/relentless-ci.yml"
@@ -356,16 +470,21 @@ else
   echo "seed skip (layers.githooks is not true): .relentless/githooks"
 fi
 
+for layer_name in merge review qa worktrees decisions templates ci githooks docs; do
+  if layer_on "$layer_name"; then
+    copy_layer_file "$layer_name"
+  fi
+done
+
 if [[ "$HARNESS" == "codex" || "$HARNESS" == "both" ]]; then
-  if layer_on review; then
-    seed_copy "${SCRIPT_DIR}/../../.codex/agents/reviewer.toml" ".codex/agents/reviewer.toml"
-  fi
-  if layer_on qa; then
-    seed_copy "${SCRIPT_DIR}/../../.codex/agents/qa.toml" ".codex/agents/qa.toml"
-  fi
-  if layer_on docs; then
-    seed_copy "${SCRIPT_DIR}/../../.codex/agents/documenter.toml" ".codex/agents/documenter.toml"
-  fi
+  refresh_codex_agent orchestrator
+  refresh_codex_agent implementer
+  refresh_codex_agent planner
+  refresh_codex_agent reviewer review
+  refresh_codex_agent qa qa
+  refresh_codex_agent documenter docs
+else
+  echo "seed skip (--harness claude): .codex/agents/*.toml"
 fi
 
 if [[ "$BRANCH_PROTECTION" -eq 1 ]]; then
@@ -391,4 +510,4 @@ fi
 echo "== done ($MODE) =="
 echo "tip: use skill setup or /relentless:setup for interactive prep."
 echo "tip: do NOT copy plugin agents/skills into this repo."
-echo "tip: re-run --apply to add a missing config, docs block, or core label. Existing files stay as they are."
+echo "tip: re-run --apply to add a missing config, docs block, or core label. A marked relentless file is refreshed. A file without the marker stays as the repo wrote it."

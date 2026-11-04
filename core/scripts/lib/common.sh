@@ -111,3 +111,35 @@ resolve_merge_mode() {
   fi
   echo "human"
 }
+
+# Exit 1 when the file exists and is not JSON. A missing file returns 0.
+# The error names the file. Callers must not treat a broken file as layers-off
+# or as "no base".
+require_parsed_config() {
+  local cfg="${1:-}" err
+  [[ -n "$cfg" && -f "$cfg" ]] || return 0
+  if ! err="$(jq empty "$cfg" 2>&1)"; then
+    echo "error: ${cfg} failed to parse: ${err}" >&2
+    exit 1
+  fi
+}
+
+# 0 when the layer is on.
+# Missing file → off (return 1). Callers that keep the pre-layer behavior when
+# the file is absent must not call this.
+# No `layers` object → on. That is an install from before layers (1.4.11),
+# including githooks.
+# Inside `layers`, only JSON true is on. Invalid JSON exits 1 via require_parsed_config.
+layer_enabled() {
+  local name="$1" cfg="${2:-}" has val
+  if [[ -z "$cfg" || ! -f "$cfg" ]]; then
+    return 1
+  fi
+  require_parsed_config "$cfg"
+  has="$(jq -r 'has("layers")' "$cfg")"
+  if [[ "$has" != "true" ]]; then
+    return 0
+  fi
+  val="$(jq -r --arg n "$name" 'if (.layers | type) == "object" and (.layers | has($n)) then (.layers[$n] | tostring) else "false" end' "$cfg")"
+  [[ "$val" == "true" ]]
+}

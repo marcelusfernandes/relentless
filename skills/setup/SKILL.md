@@ -105,9 +105,9 @@ If the user described a product outcome:
 | Artifact | Behavior |
 |----------|----------|
 | Labels | Create missing core labels only (`state:*`, `human:pending`, `human:decided`, `epic`). Never edit an existing label. |
-| Config | New file only: `base`, allowed merge methods, `checks.test` from the repo's CI, and `layers.*` all false. An existing config is not edited. |
-| Docs | `<!-- relentless:start -->` blocks upserted. |
-| Layers | CI, templates, githooks, and decisions run only when `layers.<name>` is already true. A fresh bootstrap leaves them off. |
+| Config | New file: `base`, allowed merge methods, `checks.test` from the repo's CI, and `layers.*` all false. An existing config is kept. `checks.test` is filled only when that field is absent or empty. |
+| Docs | `<!-- relentless:start -->` blocks upserted from the enabled layers. All layers off ends at `state:review`. |
+| Layers | A fresh bootstrap leaves every layer off. No `layers` key keeps the 1.4.11 layers on, including githooks. A marked `.codex` brief or `.relentless/layers` file is refreshed; a file without the marker is not touched. `merge:auto` does nothing while `layers.merge` is off. |
 | Branch protection | **Off** unless the setup question was answered yes (`--branch-protection`, fail-soft). On Codex without a sandbox the git hooks are advisory (`git push --no-verify` or `git -c core.hooksPath=/dev/null ...`); branch protection is the only hard lock on `main` there. Private and organization repos have Actions minute limits; when they are exhausted, `merge-if-ready` falls back to local checks and notes it on the PR. A self-hosted runner keeps real CI. `merge:human` still waits. |
 
 Never vendor plugin `agents/` / `skills/` into the consumer.

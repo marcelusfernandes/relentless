@@ -18,7 +18,7 @@ codex exec \
   -C /path/to/workdir \
   < implementer-prompt.md
 ```
-Export `RELENTLESS_ROLE=implementer`. Hooks are not present in Codex; the implementer TOML still forbids `review:approved`, `merge-if-ready`, and `apply-review-verdict`, and `decide.sh` refuses when that role is set.
+Export `RELENTLESS_ROLE=implementer`. The implementer TOML forbids `review:approved`, `merge-if-ready`, and `apply-review-verdict`. Codex loads the same `hooks/hooks.json` as Claude through the plugin manifest.
 
 Prefer **Write / apply_patch** over huge `cat > file <<'EOF'` heredocs inside nested sessions — Codex shell classifiers can false-positive on heredoc bodies that look like dangerous commands.
 
@@ -111,16 +111,12 @@ Bootstrap `--harness claude|codex|both` (default `both`) only seeds `.codex/agen
 
 Agents share the human's GitHub identity. There is no marker file or env token that proves a human (the agent could write it).
 
-- **Claude:** typing `/decide <issue> <option>` runs `hooks/scripts/userprompt-decide.sh` (UserPromptSubmit). The hook records the decision. The agent does not call `decide.sh`.
-- **Codex:** commands have no TTY, even in the interactive TUI, so the human cannot confirm `/decide` from inside a Codex session. `decide.sh` and `accept-adr.sh` refuse and print the exact command. That refusal is expected behavior, not a broken lock. Do not retry or try another route. The decider runs it in their own terminal, outside the agent session:
+- **Claude:** a UserPromptSubmit hook can record a typed answer from the human. The agent does not record it.
+- **Codex:** commands have no TTY, even in the interactive TUI. The human answers on the issue, outside the agent session.
 
-```bash
-core/scripts/decide.sh --repo OWNER/NAME --issue N --option K
-```
+`merge-if-ready` posts `blocked: ADR accepted without a verified decision-request` and exits non-zero, without merging, when the diff has an accepted ADR and neither the linked issue nor its native sub-issue parent has a human record (`relentless:author=human` for `decider.name` and `relentless:decision`). Body lines such as `Parent:` / `Epic:` / `Part of #N`, and an issue cited only inside the ADR, do not count. `merge:auto` and `merge:human` both stop.
 
-With the sandbox disabled, a process that allocates its own terminal lowers but does not eliminate the risk. `merge-if-ready` posts `blocked: ADR accepted without a verified decision-request` and exits non-zero, without merging, when the diff has an accepted ADR and neither the linked issue nor its native sub-issue parent has a `decide.sh` record (`relentless:author=human` for `decider.name` and `relentless:decision`). Body lines such as `Parent:` / `Epic:` / `Part of #N`, and an issue cited only inside the ADR, do not count. `merge:auto` and `merge:human` both stop.
-
-If the issue has `human:pending`, post the decision request, tell the decider (`decider.name` from config, not a hardcoded person) that command, and move on to another ready issue.
+If the issue has `human:pending`, move on to another ready issue. The human answers on the issue.
 
 ## Git hooks in the consumer repo
 
@@ -128,7 +124,7 @@ Setup / `bootstrap.sh` installs `.relentless/githooks/pre-commit` and `pre-push`
 
 - Unset `core.hooksPath` → set it to `.relentless/githooks`. An existing executable `.git/hooks/pre-commit` or `pre-push` is still chained.
 - Existing `core.hooksPath` (husky or otherwise) → left unchanged; the hook files gain one `# relentless:githooks` chain call. Re-running does not duplicate it.
-- They refuse commits on `main`/`master`, pushes that update `refs/heads/main` or `refs/heads/master`, and non-fast-forward pushes. The pre-push hook sees the old and new SHAs, not the `--force` flag, so a fast-forward update is allowed even if the client passed `--force`. The agent PreToolUse hook still blocks every force-push spelling (`-f`, `--force`, `--force-with-lease`, `+refspec`) before git runs.
+- When `layers.githooks` is on, they refuse commits on `main`/`master`, pushes that update `refs/heads/main` or `refs/heads/master`, and non-fast-forward pushes. The pre-push hook sees the old and new SHAs, not the `--force` flag, so a fast-forward update is allowed even if the client passed `--force`. A fresh bootstrap leaves the layer off. A config with no `layers` key keeps the hooks. There is no PreToolUse protect-main hook.
 - GitHub branch protection on main is **not** enabled by default. Setup asks; pass `--branch-protection` only after an explicit yes (fail-soft). On Codex without a sandbox the git-side hooks are advisory, since an agent can bypass them with `git push --no-verify` or `git -c core.hooksPath=/dev/null ...`, so branch protection is the only hard lock on `main` there. Private and organization repositories also have GitHub Actions minute limits. When that quota or the spending limit is exhausted, `merge-if-ready` runs the configured checks locally on the PR head and notes that on the PR. With `merge:auto`, a pass on a stable head SHA may merge without a human. `merge:human` still waits. A self-hosted runner is how to keep real Actions CI. Proposed in `docs/decisions/adr/0003-ci-quota-local-checks.md`.
 
 ## End of turn
@@ -138,7 +134,7 @@ There is no Claude Stop hook. The implementer brief is the rule: tests pass, and
 ## Hook regression tests
 
 ```bash
-bash tests/hooks/test-hooks.sh          # PreToolUse protect-main, reviewer isolation, decide block
+bash tests/hooks/test-hooks.sh          # reviewer isolation, decide block; protect-main is gone
 bash tests/hooks/test-decide-guard.sh   # agent refusal, forged env, human PTY, UserPromptSubmit, merge ADR guard
 bash tests/hooks/test-githooks.sh       # core.hooksPath install, husky chain, main and force-push
 python3 tests/agents/test-codex-agent-briefs.py  # Codex TOML instructions cover agents/*.md

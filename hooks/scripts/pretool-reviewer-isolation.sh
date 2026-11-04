@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# PreToolUse: block implementer from applying review:approved / apply-review-verdict / merge-if-ready
-# when RELENTLESS_ROLE=implementer (or agent name looks like implementer).
-# Claude/Codex: exit 2 = block.
+# PreToolUse: block an implementer from applying review:approved / apply-review-verdict / merge-if-ready.
+# The signal that reaches this process is .relentless/worktree.json at the git toplevel
+# (this process cwd, or the payload cwd). Role env vars are an extra signal.
+# A named other role stays on its own path. Claude/Codex: exit 2 = block.
 #
 # Avoid false positives on docs/heredocs that merely *mention* approval or merge:
 # strip heredoc bodies before matching, and require command-like patterns.
 set -euo pipefail
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../core/scripts/lib/common.sh
+source "${HOOK_DIR}/../../core/scripts/lib/common.sh"
 
 INPUT="$(cat || true)"  # intentional: empty stdin ok
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // .command // empty' 2>/dev/null || true)"  # intentional fail-soft
@@ -131,8 +135,53 @@ reviewer_gh_api_unsafe() {
 ROLE="${RELENTLESS_ROLE:-${CODEX_THREAD_ROLE:-}}"
 AGENT="${CLAUDE_AGENT:-${AGENT_NAME:-}}"
 
+# worktree-create writes this marker. The harness does not export a role into
+# the hook process, so an untracked marker is the signal that reaches the hook.
+# A tracked marker is on every checkout of that commit, including main, so it
+# is not a role signal. protect-worktree-write still treats a present file as
+# a worktree for path confinement; that check is not this role check.
+worktree_marker_at() {
+  local dir="$1" top=""
+  [[ -n "$dir" && -d "$dir" ]] || return 1
+  if git -C "$dir" rev-parse --show-toplevel >/dev/null 2>&1; then
+    top="$(git -C "$dir" rev-parse --show-toplevel)"
+  else
+    return 1
+  fi
+  [[ -f "$top/.relentless/worktree.json" ]] || return 1
+  if git -C "$top" ls-files --error-unmatch .relentless/worktree.json >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
+in_implementer_worktree() {
+  local pcwd=""
+  if worktree_marker_at "$(pwd)"; then
+    return 0
+  fi
+  if command -v jq >/dev/null 2>&1 && [[ -n "${INPUT:-}" ]]; then
+    pcwd="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)"  # intentional fail-soft
+  fi
+  if [[ -n "$pcwd" ]] && worktree_marker_at "$pcwd"; then
+    return 0
+  fi
+  return 1
+}
+
+# Env role is an extra signal. A named other role (orchestrator, reviewer)
+# is not an implementer, even inside a worktree. No role plus the marker is.
 is_implementer=0
+other_role=0
+case "$ROLE" in
+  reviewer|orchestrator|qa|planner|documenter) other_role=1 ;;
+esac
+case "$AGENT" in
+  reviewer|orchestrator|qa|planner|documenter|*:reviewer|*:orchestrator|*:qa|*:planner|*:documenter) other_role=1 ;;
+esac
 if [[ "$ROLE" == "implementer" ]] || [[ "$AGENT" == *"implementer"* ]]; then
+  is_implementer=1
+elif [[ "$other_role" -eq 0 ]] && in_implementer_worktree; then
   is_implementer=1
 fi
 
@@ -163,6 +212,29 @@ if [[ "$is_implementer" -eq 1 ]]; then
   exit 0
 fi
 
+# Reviewer-side checks follow layers.review. The implementer block above does not.
+# Missing config keeps the checks (they were always on before layers).
+# No layers object keeps them on (1.4.11). A config that does not parse fails
+# closed: PreToolUse treats exit 1 as a non-blocking error, so this hook
+# exits 2 and names the file. Scripts still exit 1.
+review_layer_active() {
+  local top cfg err
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"  # intentional fail-soft: not every cwd is a checkout
+  cfg=""
+  if [[ -n "$top" && -f "${top}/.relentless/config.json" ]]; then
+    cfg="${top}/.relentless/config.json"
+  elif [[ -f .relentless/config.json ]]; then
+    cfg="$(pwd)/.relentless/config.json"
+  else
+    return 0
+  fi
+  if ! err="$(jq empty "$cfg" 2>&1)"; then
+    echo "error: ${cfg} failed to parse: ${err}" >&2
+    exit 2
+  fi
+  layer_enabled review "$cfg"
+}
+
 # Reviewer only. The gh allowlist star matches the rest of the command, so a
 # second method flag or --input still looks like an allowed GET. Deny those here.
 # One -X/--method, including with -f/-F, stays allowed. Other roles are unchanged.
@@ -170,7 +242,7 @@ is_reviewer=0
 if [[ "$ROLE" == "reviewer" || "$AGENT" == "reviewer" || "$AGENT" == *":reviewer" ]]; then
   is_reviewer=1
 fi
-if [[ "$is_reviewer" -eq 1 ]] && reviewer_gh_api_unsafe; then
+if [[ "$is_reviewer" -eq 1 ]] && review_layer_active && reviewer_gh_api_unsafe; then
   echo "[relentless] BLOCKED: reviewer gh api may use one -X/--method and must not pass --input." >&2
   exit 2
 fi

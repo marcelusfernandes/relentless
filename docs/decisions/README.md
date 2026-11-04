@@ -18,9 +18,9 @@ Two layers:
 
 ## Lifecycle (durable human decisions)
 1. Agent drafts `decision-request` (numbered options with pros/cons) and may pre-create `docs/decisions/adr/NNNN-<slug>.md` with **Status: proposed**.
-2. `request-decision.sh` → `human:pending` + `state:blocked`.
-3. The decider picks an option outside the agent session: Claude `/decide`, or `decide.sh --adr PATH` in their own terminal (or `--create-adr`). Agents do not run it. A refusal inside Codex is expected (no TTY, even in the interactive TUI).
-4. Decide flow sets ADR **Status: accepted** and **Decided by**, comments `ADR: docs/decisions/adr/…` on the issue, flips `human:decided`. `## Decision` shows only the current decision; history lives in the log.
+2. The orchestrator asks on the issue → `human:pending` + `state:blocked`.
+3. The human picks an option on the issue, outside the agent session. Agents do not record it.
+4. The ADR **Status** becomes **accepted**, the issue comment links the ADR, and the label becomes `human:decided`. `## Decision` shows only the current decision; history lives in the log.
 5. Implementer/planner **read ADRs** before touching a decided area. Reviewer **requires** PRs that touch a decided area to reference the ADR path in the PR body or commits.
 
 ## Index
@@ -37,6 +37,4 @@ Keep the bullet list below current when adding records.
 ## Helpers
 ```bash
 core/scripts/new-adr.sh --workdir . --title "…" --slug worktree-per-writer [--issue N]
-core/scripts/decide.sh --repo OWNER/NAME --issue N --option K --adr docs/decisions/adr/0001-….md
-core/scripts/decide.sh --repo OWNER/NAME --issue N --option K --create-adr --title "…" --slug …
 ```
