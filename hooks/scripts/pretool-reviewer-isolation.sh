@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # PreToolUse: block an implementer from applying review:approved / apply-review-verdict / merge-if-ready.
-# The signal that reaches this process is .relentless/worktree.json at the git toplevel
-# (this process cwd, or the payload cwd). Role env vars are an extra signal.
-# A named other role stays on its own path. Claude/Codex: exit 2 = block.
+# The signal that reaches this process is an untracked .relentless/worktree.json at the git toplevel
+# (this process cwd, the payload cwd, or the directory a leading `cd <dir> &&` / `cd <dir>;` enters).
+# Role env vars are an extra signal. Reviewer, qa, planner, and documenter stay on their own path.
+# An inherited orchestrator role does not override that marker. Claude/Codex: exit 2 = block.
 #
 # Avoid false positives on docs/heredocs that merely *mention* approval or merge:
 # strip heredoc bodies before matching, and require command-like patterns.
@@ -135,8 +136,9 @@ reviewer_gh_api_unsafe() {
 ROLE="${RELENTLESS_ROLE:-${CODEX_THREAD_ROLE:-}}"
 AGENT="${CLAUDE_AGENT:-${AGENT_NAME:-}}"
 
-# worktree-create writes this marker. The harness does not export a role into
-# the hook process, so an untracked marker is the signal that reaches the hook.
+# worktree-create writes this marker. Claude does not export a role into the
+# hook process. A Codex child can inherit RELENTLESS_ROLE=orchestrator from
+# the parent. An untracked marker is still the implementer signal in both cases.
 # A tracked marker is on every checkout of that commit, including main, so it
 # is not a role signal. protect-worktree-write still treats a present file as
 # a worktree for path confinement; that check is not this role check.
@@ -155,8 +157,50 @@ worktree_marker_at() {
   return 0
 }
 
+# Leading `cd <dir> &&` or `cd <dir>;` only. The path is not evaluated.
+# pushd, bash -c, a subshell, and a cd later in the command are not this signal.
+command_cd_target() {
+  local line="" rest="" dir="" base=""
+  line="${CMD#"${CMD%%[![:space:]]*}"}"
+  [[ "$line" == cd[[:space:]]* ]] || return 1
+  rest="${line#cd}"
+  rest="${rest#"${rest%%[![:space:]]*}"}"
+  if [[ "$rest" == \"* ]]; then
+    rest="${rest#\"}"
+    dir="${rest%%\"*}"
+    rest="${rest#*\"}"
+  elif [[ "$rest" == \'* ]]; then
+    rest="${rest#\'}"
+    dir="${rest%%\'*}"
+    rest="${rest#*\'}"
+  else
+    dir="$rest"
+    dir="${dir%%[[:space:]]*}"
+    dir="${dir%%;*}"
+    dir="${dir%%&*}"
+    rest="${rest#"$dir"}"
+  fi
+  [[ -n "$dir" ]] || return 1
+  rest="${rest#"${rest%%[![:space:]]*}"}"
+  [[ "$rest" == "&&"* || "$rest" == ";"* ]] || return 1
+  case "$dir" in
+    /*) ;;
+    *)
+      base=""
+      if command -v jq >/dev/null 2>&1 && [[ -n "${INPUT:-}" ]]; then
+        base="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)"  # intentional fail-soft
+      fi
+      if [[ -z "$base" ]]; then
+        base="$(pwd)" || return 1
+      fi
+      dir="${base%/}/${dir}"
+      ;;
+  esac
+  printf '%s' "$dir"
+}
+
 in_implementer_worktree() {
-  local pcwd=""
+  local pcwd="" cd_dir=""
   if worktree_marker_at "$(pwd)"; then
     return 0
   fi
@@ -166,18 +210,26 @@ in_implementer_worktree() {
   if [[ -n "$pcwd" ]] && worktree_marker_at "$pcwd"; then
     return 0
   fi
+  if cd_dir="$(command_cd_target)"; then
+    if worktree_marker_at "$cd_dir"; then
+      return 0
+    fi
+  fi
   return 1
 }
 
-# Env role is an extra signal. A named other role (orchestrator, reviewer)
-# is not an implementer, even inside a worktree. No role plus the marker is.
+# Env role is an extra signal. Reviewer, qa, planner, and documenter are not
+# implementers, even inside a worktree. Orchestrator is not that exception:
+# a Codex child inherits RELENTLESS_ROLE=orchestrator, and the untracked marker
+# (process cwd, payload cwd, or a leading cd target) still means implementer.
+# With no marker, an orchestrator on the main checkout can merge.
 is_implementer=0
 other_role=0
 case "$ROLE" in
-  reviewer|orchestrator|qa|planner|documenter) other_role=1 ;;
+  reviewer|qa|planner|documenter) other_role=1 ;;
 esac
 case "$AGENT" in
-  reviewer|orchestrator|qa|planner|documenter|*:reviewer|*:orchestrator|*:qa|*:planner|*:documenter) other_role=1 ;;
+  reviewer|qa|planner|documenter|*:reviewer|*:qa|*:planner|*:documenter) other_role=1 ;;
 esac
 if [[ "$ROLE" == "implementer" ]] || [[ "$AGENT" == *"implementer"* ]]; then
   is_implementer=1
