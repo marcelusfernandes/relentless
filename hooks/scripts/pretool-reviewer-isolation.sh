@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # PreToolUse: block an implementer from applying review:approved / apply-review-verdict / merge-if-ready.
 # The signal that reaches this process is an untracked .relentless/worktree.json at the git toplevel
-# (this process cwd, the payload cwd, or the directory a leading `cd <dir> &&` / `cd <dir>;` enters).
+# (this process cwd, the payload cwd, the directory a leading `cd <dir> &&` / `cd <dir>;` enters,
+# or RELENTLESS_WORKTREE when the command assigns it).
+# Before that cd check, skip leading assignment prefixes: `export NAME=value …;` / `export … &&`,
+# a bare `NAME=value …;` segment, and `NAME=value` words on the same simple command.
+# RELENTLESS_ROLE=implementer in that prefix is an implementer signal even with no marker.
 # Role env vars are an extra signal. Reviewer, qa, planner, and documenter stay on their own path.
-# An inherited orchestrator role does not override that marker. Claude/Codex: exit 2 = block.
+# An inherited orchestrator role does not override a marker or a command that sets implementer.
+# Claude/Codex: exit 2 = block.
 #
 # Avoid false positives on docs/heredocs that merely *mention* approval or merge:
 # strip heredoc bodies before matching, and require command-like patterns.
@@ -137,9 +142,10 @@ ROLE="${RELENTLESS_ROLE:-${CODEX_THREAD_ROLE:-}}"
 AGENT="${CLAUDE_AGENT:-${AGENT_NAME:-}}"
 
 # worktree-create writes this marker. Claude does not export a role into the
-# hook process. A Codex child can inherit RELENTLESS_ROLE=orchestrator from
-# the parent. An untracked marker is still the implementer signal in both cases.
-# A tracked marker is on every checkout of that commit, including main, so it
+# hook process; the worktree brief puts `export RELENTLESS_ROLE=implementer`
+# on the command itself. A Codex child can inherit RELENTLESS_ROLE=orchestrator
+# from the parent. An untracked marker is still the implementer signal in both
+# cases. A tracked marker is on every checkout of that commit, including main, so it
 # is not a role signal. protect-worktree-write still treats a present file as
 # a worktree for path confinement; that check is not this role check.
 worktree_marker_at() {
@@ -157,11 +163,178 @@ worktree_marker_at() {
   return 0
 }
 
-# Leading `cd <dir> &&` or `cd <dir>;` only. The path is not evaluated.
+# Assignment-prefix scan. Globals: LEAD_ROLE, LEAD_WORKTREE, CMD_BODY,
+# ASG_NAME, ASG_VALUE, ASG_REST, HSPACE_S, SEP_REST.
+# Values are not evaluated. Quoted values may contain spaces and `;`.
+
+skip_hspace() {
+  local c=""
+  while [[ -n "$HSPACE_S" ]]; do
+    c="${HSPACE_S:0:1}"
+    if [[ "$c" == " " || "$c" == $'\t' || "$c" == $'\r' ]]; then
+      HSPACE_S="${HSPACE_S:1}"
+      continue
+    fi
+    break
+  done
+}
+
+assignment_name_at() {
+  local name="${1%%=*}"
+  [[ "$1" == *=* ]] || return 1
+  [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
+}
+
+note_lead_assignment() {
+  case "$ASG_NAME" in
+    RELENTLESS_ROLE) LEAD_ROLE="$ASG_VALUE" ;;
+    RELENTLESS_WORKTREE) LEAD_WORKTREE="$ASG_VALUE" ;;
+  esac
+}
+
+# One NAME=value at the front of $1. Sets ASG_NAME, ASG_VALUE, ASG_REST.
+parse_one_assignment() {
+  local s="$1" name="" rest="" value="" c=""
+  [[ -n "$s" && "$s" == *=* ]] || return 1
+  name="${s%%=*}"
+  [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  rest="${s#"$name"=}"
+  if [[ "$rest" == \"* ]]; then
+    rest="${rest#\"}"
+    value=""
+    while [[ -n "$rest" ]]; do
+      c="${rest:0:1}"
+      rest="${rest:1}"
+      if [[ "$c" == "\\" && -n "$rest" ]]; then
+        value+="${rest:0:1}"
+        rest="${rest:1}"
+        continue
+      fi
+      if [[ "$c" == '"' ]]; then
+        break
+      fi
+      value+="$c"
+    done
+  elif [[ "$rest" == \'* ]]; then
+    rest="${rest#\'}"
+    if [[ "$rest" == *"'"* ]]; then
+      value="${rest%%\'*}"
+      rest="${rest#*"'"}"
+    else
+      value="$rest"
+      rest=""
+    fi
+  else
+    value=""
+    while [[ -n "$rest" ]]; do
+      c="${rest:0:1}"
+      if [[ "$c" == [[:space:]] || "$c" == ";" || "$c" == "&" || "$c" == "|" ]]; then
+        break
+      fi
+      value+="$c"
+      rest="${rest:1}"
+    done
+  fi
+  ASG_NAME="$name"
+  ASG_VALUE="$value"
+  ASG_REST="$rest"
+}
+
+# One or more NAME=value words. Sets ASG_REST to the unparsed tail.
+parse_assignment_list() {
+  local n=0
+  HSPACE_S="$1"
+  skip_hspace
+  while assignment_name_at "$HSPACE_S"; do
+    parse_one_assignment "$HSPACE_S" || return 1
+    note_lead_assignment
+    HSPACE_S="$ASG_REST"
+    skip_hspace
+    n=$((n + 1))
+  done
+  [[ "$n" -ge 1 ]] || return 1
+  ASG_REST="$HSPACE_S"
+}
+
+# 0 when $1 begins a `;`, `&&`, or newline separator. Sets SEP_REST.
+assignment_separator() {
+  local s=""
+  HSPACE_S="$1"
+  skip_hspace
+  s="$HSPACE_S"
+  if [[ "$s" == ";"* ]]; then
+    SEP_REST="${s#;}"
+    return 0
+  fi
+  if [[ "$s" == "&&"* ]]; then
+    SEP_REST="${s#&&}"
+    return 0
+  fi
+  if [[ "$s" == $'\n'* ]]; then
+    SEP_REST="${s:1}"
+    return 0
+  fi
+  return 1
+}
+
+# Drop leading assignment commands and a same-command NAME=value prefix.
+# Records RELENTLESS_ROLE and RELENTLESS_WORKTREE from that prefix only.
+strip_leading_shell_assignments() {
+  local s="$1" saved="" role_snap="" wt_snap=""
+  LEAD_ROLE=""
+  LEAD_WORKTREE=""
+  while [[ -n "$s" ]]; do
+    s="${s#"${s%%[![:space:]]*}"}"
+    [[ -n "$s" ]] || break
+    if [[ "$s" == export[[:space:]]* ]]; then
+      saved="$s"
+      role_snap="$LEAD_ROLE"
+      wt_snap="$LEAD_WORKTREE"
+      s="${s#export}"
+      s="${s#"${s%%[![:space:]]*}"}"
+      if ! parse_assignment_list "$s"; then
+        LEAD_ROLE="$role_snap"
+        LEAD_WORKTREE="$wt_snap"
+        s="$saved"
+        break
+      fi
+      if assignment_separator "$ASG_REST"; then
+        s="$SEP_REST"
+        continue
+      fi
+      LEAD_ROLE="$role_snap"
+      LEAD_WORKTREE="$wt_snap"
+      s="$saved"
+      break
+    fi
+    if assignment_name_at "$s"; then
+      saved="$s"
+      role_snap="$LEAD_ROLE"
+      wt_snap="$LEAD_WORKTREE"
+      if ! parse_assignment_list "$s"; then
+        LEAD_ROLE="$role_snap"
+        LEAD_WORKTREE="$wt_snap"
+        s="$saved"
+        break
+      fi
+      if assignment_separator "$ASG_REST"; then
+        s="$SEP_REST"
+        continue
+      fi
+      s="${ASG_REST#"${ASG_REST%%[![:space:]]*}"}"
+      break
+    fi
+    break
+  done
+  CMD_BODY="$s"
+}
+
+# Leading `cd <dir> &&` or `cd <dir>;` on the text after leading assignments.
+# The path is not evaluated.
 # pushd, bash -c, a subshell, and a cd later in the command are not this signal.
 command_cd_target() {
   local line="" rest="" dir="" base=""
-  line="${CMD#"${CMD%%[![:space:]]*}"}"
+  line="${CMD_BODY#"${CMD_BODY%%[![:space:]]*}"}"
   [[ "$line" == cd[[:space:]]* ]] || return 1
   rest="${line#cd}"
   rest="${rest#"${rest%%[![:space:]]*}"}"
@@ -199,6 +372,26 @@ command_cd_target() {
   printf '%s' "$dir"
 }
 
+# RELENTLESS_WORKTREE from the leading prefix. Relative paths use the payload cwd.
+lead_worktree_marker() {
+  local dir="$LEAD_WORKTREE" base=""
+  [[ -n "$dir" ]] || return 1
+  case "$dir" in
+    /*) ;;
+    *)
+      base=""
+      if command -v jq >/dev/null 2>&1 && [[ -n "${INPUT:-}" ]]; then
+        base="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)"  # intentional fail-soft
+      fi
+      if [[ -z "$base" ]]; then
+        base="$(pwd)" || return 1
+      fi
+      dir="${base%/}/${dir}"
+      ;;
+  esac
+  worktree_marker_at "$dir"
+}
+
 in_implementer_worktree() {
   local pcwd="" cd_dir=""
   if worktree_marker_at "$(pwd)"; then
@@ -215,14 +408,24 @@ in_implementer_worktree() {
       return 0
     fi
   fi
+  if lead_worktree_marker; then
+    return 0
+  fi
   return 1
 }
 
 # Env role is an extra signal. Reviewer, qa, planner, and documenter are not
 # implementers, even inside a worktree. Orchestrator is not that exception:
 # a Codex child inherits RELENTLESS_ROLE=orchestrator, and the untracked marker
-# (process cwd, payload cwd, or a leading cd target) still means implementer.
-# With no marker, an orchestrator on the main checkout can merge.
+# (process cwd, payload cwd, a leading cd target, or RELENTLESS_WORKTREE in the
+# command) still means implementer. RELENTLESS_ROLE=implementer written on the
+# command is the same signal when this process has no other role. With no
+# marker and no implementer assignment, an orchestrator on the main checkout
+# can merge.
+LEAD_ROLE=""
+LEAD_WORKTREE=""
+CMD_BODY="$CMD"
+strip_leading_shell_assignments "$CMD"
 is_implementer=0
 other_role=0
 case "$ROLE" in
@@ -232,6 +435,8 @@ case "$AGENT" in
   reviewer|qa|planner|documenter|*:reviewer|*:qa|*:planner|*:documenter) other_role=1 ;;
 esac
 if [[ "$ROLE" == "implementer" ]] || [[ "$AGENT" == *"implementer"* ]]; then
+  is_implementer=1
+elif [[ "$other_role" -eq 0 && "$LEAD_ROLE" == "implementer" ]]; then
   is_implementer=1
 elif [[ "$other_role" -eq 0 ]] && in_implementer_worktree; then
   is_implementer=1
