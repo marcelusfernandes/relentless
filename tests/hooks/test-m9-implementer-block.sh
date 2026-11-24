@@ -13,7 +13,17 @@
 # - Codex can inherit RELENTLESS_ROLE=orchestrator from the parent. That role
 #   must not skip the marker when the cwd or the cd target is the worktree.
 #   The same role on the main checkout can still merge.
-# pushd, bash -c, a subshell, and `gh pr merge -R` with no cd are out of scope.
+# pushd, bash -c, a subshell `(...)`, `export ... || true;`, `declare -x`,
+# `FOO=a\ b`, and `gh pr merge -R` with no cd are out of scope.
+# An inline assignment is the role for the whole line (`RELENTLESS_ROLE=implementer cmd; gh pr merge` blocks).
+#
+# Live miss (leading export / assignment; Bash cwd stays on the main checkout):
+# - `export RELENTLESS_ROLE=implementer …; cd <wt> && gh pr merge` must exit 2
+#   and print BLOCKED. The same export with no worktree marker must too.
+# - `NAME=value` words with no separator (`RELENTLESS_ROLE=implementer gh pr merge`)
+#   are the same signal.
+# - `export A=1; B=2; cd <wt> && … gh pr merge` must still see the cd target.
+# - `export RELENTLESS_ROLE=orchestrator; gh pr merge` on the main checkout stays allowed.
 #
 # Real harness contract:
 # - hooks/hooks.json command (Claude plugin.json and Codex .codex-plugin/plugin.json
@@ -156,6 +166,100 @@ expect_rc codex-orch-main "$TMP/primary" "$codex_orch" \
   "gh pr merge 3 --merge" 0 0
 expect_rc codex-orch-cd-main "$TMP/primary" "$codex_orch" \
   "cd \"${TMP}/primary\" && gh pr merge 3 --merge" 0 0
+
+# F6 — leading assignment prefixes. cwd is the main checkout. The untracked
+# marker lives only in the worktree. A tracked marker on primary is not a signal.
+expect_rc f6-hexgym-pr26 "$TMP/primary" "$claude_env" \
+  'export RELENTLESS_ROLE=implementer RELENTLESS_WORKTREE=/tmp/hexgym-relentless-wt-23; cd /tmp/hexgym-relentless-wt-23 && env | grep ... || echo NO_ROLE_ENV; gh pr merge 26 --squash; echo merge_rc=$?' \
+  2 1
+expect_rc f6-export-role-wt-cd "$TMP/primary" "$claude_env" \
+  "export RELENTLESS_ROLE=implementer RELENTLESS_WORKTREE=${TMP}/wt; cd ${TMP}/wt && gh pr merge 1" \
+  2 1
+expect_rc f6-export-role "$TMP/primary" "$claude_env" \
+  "export RELENTLESS_ROLE=implementer; gh pr merge 1" 2 1
+expect_rc f6-export-role-dquote "$TMP/primary" "$claude_env" \
+  "export RELENTLESS_ROLE=\"implementer\"; gh pr merge 1" 2 1
+expect_rc f6-export-role-squote "$TMP/primary" "$claude_env" \
+  "export RELENTLESS_ROLE='implementer'; gh pr merge 1" 2 1
+expect_rc f6-export-foo-cd "$TMP/primary" "$claude_env" \
+  "export FOO=bar; cd ${TMP}/wt && gh pr merge 1" 2 1
+expect_rc f6-export-foo-and-cd "$TMP/primary" "$claude_env" \
+  "export FOO=bar && cd ${TMP}/wt && gh pr merge 1" 2 1
+expect_rc f6-export-quoted-semi "$TMP/primary" "$claude_env" \
+  "export FOO=\"a;b\"; cd ${TMP}/wt && gh pr merge 1" 2 1
+expect_rc f6-inline-role "$TMP/primary" "$claude_env" \
+  "RELENTLESS_ROLE=implementer gh pr merge 1" 2 1
+expect_rc f6-inline-foo-role "$TMP/primary" "$claude_env" \
+  "FOO=bar RELENTLESS_ROLE=implementer gh pr merge 1 --squash" 2 1
+expect_rc f6-chain "$TMP/primary" "$claude_env" \
+  'export A=1; B=2; cd '"${TMP}/wt"' && git status; echo x && gh pr merge 1; echo rc=$?' \
+  2 1
+expect_rc f6-cd-and "$TMP/primary" "$claude_env" \
+  "cd ${TMP}/wt && gh pr merge 1" 2 1
+expect_rc f6-cd-semi "$TMP/primary" "$claude_env" \
+  "cd ${TMP}/wt; gh pr merge 1" 2 1
+expect_rc f6-wt-only "$TMP/primary" "$claude_env" \
+  "export RELENTLESS_WORKTREE=${TMP}/wt; gh pr merge 1" 2 1
+expect_rc f6-wt-quoted "$TMP/primary" "$claude_env" \
+  "export RELENTLESS_WORKTREE=\"${TMP}/wt\"; gh pr merge 1" 2 1
+expect_rc f6-wt-rel "$TMP/primary" "$claude_env" \
+  "export RELENTLESS_WORKTREE=../wt; gh pr merge 1" 2 1
+expect_rc f6-orch-env-cmd-impl "$TMP/primary" "$codex_orch" \
+  "export RELENTLESS_ROLE=implementer; gh pr merge 1" 2 1
+
+# Orchestrator on the main checkout, including a leading export that is not implementer.
+expect_rc f6-orch-export "$TMP/primary" "$claude_env" \
+  "export RELENTLESS_ROLE=orchestrator; gh pr merge 1" 0 0
+expect_rc f6-export-foo-main "$TMP/primary" "$claude_env" \
+  "export FOO=bar; gh pr merge 1" 0 0
+expect_rc f6-inline-foo-main "$TMP/primary" "$claude_env" \
+  "FOO=bar gh pr merge 1" 0 0
+expect_rc f6-wt-tracked-main "$TMP/primary" "$claude_env" \
+  "export RELENTLESS_WORKTREE=${TMP}/primary; gh pr merge 1" 0 0
+expect_rc f6-role-push "$TMP/primary" "$claude_env" \
+  "export RELENTLESS_ROLE=implementer; git push -u origin feat/9-login" 0 0
+
+# Backslash-newline between assignments, and `env NAME=value cmd`.
+expect_rc f6-cont-role "$TMP/primary" "$claude_env" \
+  $'export RELENTLESS_ROLE=implementer \\\n RELENTLESS_WORKTREE=/x; gh pr merge 1' \
+  2 1
+expect_rc f6-cont-cd "$TMP/primary" "$claude_env" \
+  $'export RELENTLESS_ROLE=implementer \\\n RELENTLESS_WORKTREE=/x; cd '"${TMP}/wt"$' && gh pr merge 1' \
+  2 1
+expect_rc f6-env-role "$TMP/primary" "$claude_env" \
+  "env RELENTLESS_ROLE=implementer gh pr merge 1" 2 1
+expect_rc f6-env-foo-role "$TMP/primary" "$claude_env" \
+  "env FOO=1 RELENTLESS_ROLE=implementer gh pr merge 1" 2 1
+expect_rc f6-env-foo-main "$TMP/primary" "$codex_orch" \
+  "env FOO=1 gh pr merge 1" 0 0
+
+# ~50 KB quoted value. A per-character slice is O(n^2) and exceeds the hook timeout.
+if ! command -v python3 >/dev/null 2>&1; then
+  bad "M9 50KB timing needs python3"
+else
+  pad="$(python3 -c 'print("a"*50000, end="")')"
+  now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
+  big_impl="export RELENTLESS_ROLE=implementer FOO=\"${pad}\"; gh pr merge 1"
+  big_orch="export RELENTLESS_ROLE=orchestrator FOO=\"${pad}\"; gh pr merge 1"
+  t0="$(now_ms)"
+  expect_rc f6-big-impl "$TMP/primary" "$claude_env" "$big_impl" 2 1
+  t1="$(now_ms)"
+  expect_rc f6-big-orch "$TMP/primary" "$claude_env" "$big_orch" 0 0
+  t2="$(now_ms)"
+  impl_ms=$((t1 - t0))
+  orch_ms=$((t2 - t1))
+  if [[ "$impl_ms" -lt 2000 ]]; then
+    ok
+  else
+    bad "M9 50KB implementer took ${impl_ms}ms, want < 2000"
+  fi
+  if [[ "$orch_ms" -lt 2000 ]]; then
+    ok
+  else
+    bad "M9 50KB orchestrator took ${orch_ms}ms, want < 2000"
+  fi
+  printf 'timing 50KB implementer=%sms orchestrator=%sms\n' "$impl_ms" "$orch_ms"
+fi
 
 echo "pass=$PASS fail=$FAIL"
 [[ $FAIL -eq 0 ]]
