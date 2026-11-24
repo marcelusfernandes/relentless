@@ -4,7 +4,8 @@
 # (this process cwd, the payload cwd, the directory a leading `cd <dir> &&` / `cd <dir>;` enters,
 # or RELENTLESS_WORKTREE when the command assigns it).
 # Before that cd check, skip leading assignment prefixes: `export NAME=value …;` / `export … &&`,
-# a bare `NAME=value …;` segment, and `NAME=value` words on the same simple command.
+# a bare `NAME=value …;` segment, `NAME=value` words on the same simple command, and
+# `env NAME=value … cmd`. A backslash-newline between those assignments is whitespace.
 # RELENTLESS_ROLE=implementer in that prefix is an implementer signal even with no marker.
 # Role env vars are an extra signal. Reviewer, qa, planner, and documenter stay on their own path.
 # An inherited orchestrator role does not override a marker or a command that sets implementer.
@@ -167,13 +168,29 @@ worktree_marker_at() {
 # ASG_NAME, ASG_VALUE, ASG_REST, HSPACE_S, SEP_REST.
 # Values are not evaluated. Quoted values may contain spaces and `;`.
 
+# Spaces, tabs, CR, and a backslash-newline continuation. Not a per-character
+# walk of a value: callers only hand this the gap between tokens.
 skip_hspace() {
-  local c=""
+  local c="" n=""
   while [[ -n "$HSPACE_S" ]]; do
     c="${HSPACE_S:0:1}"
     if [[ "$c" == " " || "$c" == $'\t' || "$c" == $'\r' ]]; then
       HSPACE_S="${HSPACE_S:1}"
       continue
+    fi
+    if [[ "$c" == "\\" ]]; then
+      n="${HSPACE_S:1:1}"
+      if [[ "$n" == $'\n' ]]; then
+        HSPACE_S="${HSPACE_S:2}"
+        continue
+      fi
+      if [[ "$n" == $'\r' ]]; then
+        HSPACE_S="${HSPACE_S:2}"
+        if [[ "${HSPACE_S:0:1}" == $'\n' ]]; then
+          HSPACE_S="${HSPACE_S:1}"
+        fi
+        continue
+      fi
     fi
     break
   done
@@ -193,47 +210,70 @@ note_lead_assignment() {
 }
 
 # One NAME=value at the front of $1. Sets ASG_NAME, ASG_VALUE, ASG_REST.
+# Slice a value in one expansion. Walking it with rest="${rest:1}" is O(n^2)
+# and a 50 KB quote blows the Claude hook timeout (the hook then fails open).
 parse_one_assignment() {
-  local s="$1" name="" rest="" value="" c=""
+  local s="$1" name="" rest="" value="" chunk="" pre_b="" pre_q="" esc="" q=""
   [[ -n "$s" && "$s" == *=* ]] || return 1
   name="${s%%=*}"
   [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
   rest="${s#"$name"=}"
   if [[ "$rest" == \"* ]]; then
-    rest="${rest#\"}"
+    rest="${rest:1}"
     value=""
+    # ${var%%\"*} and ${var#"$long"} are quadratic in this bash. Cut with the
+    # quote kept in a variable, then drop the prefix by index.
+    q='"'
     while [[ -n "$rest" ]]; do
-      c="${rest:0:1}"
-      rest="${rest:1}"
-      if [[ "$c" == "\\" && -n "$rest" ]]; then
-        value+="${rest:0:1}"
-        rest="${rest:1}"
-        continue
-      fi
-      if [[ "$c" == '"' ]]; then
+      if [[ "$rest" != *\\* ]]; then
+        if [[ "$rest" == *"$q"* ]]; then
+          chunk="${rest%%"$q"*}"
+          value+="$chunk"
+          rest="${rest:$((${#chunk} + 1))}"
+        else
+          value+="$rest"
+          rest=""
+        fi
         break
       fi
-      value+="$c"
+      # [\\] is one literal backslash. A bare backslash in the pattern escapes the next character.
+      pre_b="${rest%%[\\]*}"
+      pre_q="${rest%%"$q"*}"
+      if [[ "$rest" == *"$q"* && ${#pre_q} -le ${#pre_b} ]]; then
+        value+="$pre_q"
+        rest="${rest:$((${#pre_q} + 1))}"
+        break
+      fi
+      value+="$pre_b"
+      rest="${rest:$((${#pre_b} + 1))}"
+      if [[ -z "$rest" ]]; then
+        value+='\'
+        break
+      fi
+      esc="${rest:0:1}"
+      rest="${rest:1}"
+      if [[ "$esc" == $'\n' || "$esc" == $'\r' ]]; then
+        if [[ "$esc" == $'\r' && "${rest:0:1}" == $'\n' ]]; then
+          rest="${rest:1}"
+        fi
+        continue
+      fi
+      value+="$esc"
     done
   elif [[ "$rest" == \'* ]]; then
-    rest="${rest#\'}"
-    if [[ "$rest" == *"'"* ]]; then
-      value="${rest%%\'*}"
-      rest="${rest#*"'"}"
+    rest="${rest:1}"
+    q="'"
+    if [[ "$rest" == *"$q"* ]]; then
+      value="${rest%%"$q"*}"
+      rest="${rest:$((${#value} + 1))}"
     else
       value="$rest"
       rest=""
     fi
   else
-    value=""
-    while [[ -n "$rest" ]]; do
-      c="${rest:0:1}"
-      if [[ "$c" == [[:space:]] || "$c" == ";" || "$c" == "&" || "$c" == "|" ]]; then
-        break
-      fi
-      value+="$c"
-      rest="${rest:1}"
-    done
+    # Leave a trailing backslash in the tail so \<newline> stays a separator.
+    value="${rest%%[[:space:];&|\\]*}"
+    rest="${rest:${#value}}"
   fi
   ASG_NAME="$name"
   ASG_VALUE="$value"
@@ -307,6 +347,28 @@ strip_leading_shell_assignments() {
       s="$saved"
       break
     fi
+    # `env NAME=value cmd` applies those names to cmd. `env NAME=value; cmd` does not.
+    if [[ "$s" == env[[:space:]]* ]]; then
+      saved="$s"
+      role_snap="$LEAD_ROLE"
+      wt_snap="$LEAD_WORKTREE"
+      s="${s#env}"
+      s="${s#"${s%%[![:space:]]*}"}"
+      if ! parse_assignment_list "$s"; then
+        LEAD_ROLE="$role_snap"
+        LEAD_WORKTREE="$wt_snap"
+        s="$saved"
+        break
+      fi
+      if assignment_separator "$ASG_REST"; then
+        LEAD_ROLE="$role_snap"
+        LEAD_WORKTREE="$wt_snap"
+        s="$saved"
+        break
+      fi
+      s="${ASG_REST#"${ASG_REST%%[![:space:]]*}"}"
+      break
+    fi
     if assignment_name_at "$s"; then
       saved="$s"
       role_snap="$LEAD_ROLE"
@@ -331,7 +393,11 @@ strip_leading_shell_assignments() {
 
 # Leading `cd <dir> &&` or `cd <dir>;` on the text after leading assignments.
 # The path is not evaluated.
-# pushd, bash -c, a subshell, and a cd later in the command are not this signal.
+# Out of scope: pushd, bash -c, a subshell `(...)`, `export ... || true;`,
+# `declare -x`, `FOO=a\ b`, and a cd later in the command.
+# An inline or `env` assignment is the role for the whole line, so
+# `RELENTLESS_ROLE=implementer codex exec ...; gh pr merge` on main blocks.
+# No brief writes that.
 command_cd_target() {
   local line="" rest="" dir="" base=""
   line="${CMD_BODY#"${CMD_BODY%%[![:space:]]*}"}"
