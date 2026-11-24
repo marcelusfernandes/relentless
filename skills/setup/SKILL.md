@@ -30,7 +30,7 @@ If the repo already has Relentless and you only need the new agent briefs / docs
   --harness both --upgrade --apply
 ```
 
-Adds a missing config, the docs block, and missing core labels. Does not edit an existing config, label, template, workflow, or `.codex` file. Then commit on a branch and open a PR as usual.
+Adds a missing config, the docs block, and missing core labels. Does not edit an existing config, label, template, or workflow. A `.codex` brief is refreshed only when it still has the `relentless:owned` marker. `--upgrade` with harness codex or both removes a legacy `# Relentless Codex pin` from `.codex/config.toml` (the pin comments and the two relentless tables). Then commit on a branch and open a PR as usual.
 
 ## Plugin install (before or during)
 

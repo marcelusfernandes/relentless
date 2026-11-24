@@ -7,7 +7,8 @@
 # only when that field is absent or empty. A relentless-owned file
 # (.codex/agents/*.toml, .relentless/layers/<layer>.md) is refreshed only when
 # it still carries the relentless:owned marker. A file without the marker is
-# never touched.
+# never touched. --upgrade also removes the v1.4.11 Codex marketplace pin from
+# .codex/config.toml when that pin is still there.
 set -euo pipefail
 
 REPO="" APPLY=0 CONFIG="" WORKDIR="" SEED_FILES=1
@@ -40,7 +41,8 @@ Usage: $(basename "$0") --repo OWNER/NAME [options]
   --no-init-empty          Do not create initial commit on empty repos
   --harness claude|codex|both
   --branch-protection      Opt in to GitHub branch protection. Off unless passed.
-  --upgrade                Kept for compatibility. Does not rewrite existing files.
+  --upgrade                Kept for compatibility. Also removes a legacy Codex
+                           marketplace pin from .codex/config.toml.
 
 A new config records the repo default branch (base), the merge methods the
 repo allows, and checks.test from the repo's own workflow. layers.* start
@@ -483,6 +485,92 @@ if [[ "$HARNESS" == "codex" || "$HARNESS" == "both" ]]; then
   refresh_codex_agent reviewer review
   refresh_codex_agent qa qa
   refresh_codex_agent documenter docs
+
+  # v1.4.11 wrote a marketplace pin into the consumer's .codex/config.toml.
+  # Codex reinstalls that ref into the shared plugin cache, so an upgrade has
+  # to take the pin back out or the old plugin comes back. Only the two pin
+  # comments and the two relentless tables are removed. Runs on --upgrade.
+  retire_legacy_codex_pin() {
+    local cfg tmp line drop
+    [[ "$UPGRADE" -eq 1 && -n "$WORKDIR" ]] || return 0
+    cfg="${WORKDIR}/.codex/config.toml"
+    [[ -f "$cfg" ]] || return 0
+    # The marker is the comment the old writer left. No marker, no edit.
+    grep -q '# Relentless Codex pin' "$cfg" || return 0
+    if [[ "$APPLY" -eq 0 ]]; then
+      echo "retire (dry-run): .codex/config.toml legacy marketplace pin"
+      return 0
+    fi
+
+    # Trim a copy for matching. The line that is written back is the original.
+    _retire_trim() {
+      local s="$1"
+      s="${s#"${s%%[![:space:]]*}"}"
+      s="${s%"${s##*[![:space:]]}"}"
+      printf '%s' "$s"
+    }
+    _retire_is_pin_comment() {
+      local t
+      t="$(_retire_trim "$1")"
+      case "$t" in
+        "# Relentless Codex pin"*) return 0 ;;
+      esac
+      # Second line of the 1.4.11 block: "re-run bootstrap --upgrade or edit ref=".
+      case "$t" in
+        "#"*"re-run bootstrap --upgrade or edit ref="*) return 0 ;;
+      esac
+      return 1
+    }
+    _retire_is_pin_table() {
+      local t
+      t="$(_retire_trim "$1")"
+      case "$t" in
+        '[marketplaces.relentless]') return 0 ;;
+        '[plugins."relentless@relentless"]') return 0 ;;
+      esac
+      return 1
+    }
+    _retire_is_table_header() {
+      local t
+      t="$(_retire_trim "$1")"
+      case "$t" in
+        "["*) return 0 ;;
+      esac
+      return 1
+    }
+
+    tmp="$(mktemp)"
+    drop=0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$drop" -eq 1 ]]; then
+        # A pin table runs until the next table header or EOF. The other
+        # relentless table keeps the drop going.
+        if _retire_is_table_header "$line" && ! _retire_is_pin_table "$line"; then
+          drop=0
+        else
+          continue
+        fi
+      fi
+      if _retire_is_pin_comment "$line"; then
+        continue
+      fi
+      if _retire_is_pin_table "$line"; then
+        drop=1
+        continue
+      fi
+      printf '%s\n' "$line"
+    done <"$cfg" >"$tmp"
+
+    if grep -q '[^[:space:]]' "$tmp"; then
+      # Keep the existing mode. mv from mktemp would replace it with 0600.
+      cat "$tmp" >"$cfg"
+      rm -f "$tmp"
+    else
+      rm -f "$tmp" "$cfg"
+    fi
+    echo "retire: .codex/config.toml legacy marketplace pin"
+  }
+  retire_legacy_codex_pin
 else
   echo "seed skip (--harness claude): .codex/agents/*.toml"
 fi

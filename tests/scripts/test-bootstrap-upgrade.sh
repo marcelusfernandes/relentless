@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # F46/F47/F48 — bootstrap --upgrade refreshes owned files, preserves checks + CI.
+# --upgrade also retires the v1.4.11 Codex marketplace pin.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PASS=0 FAIL=0
@@ -281,6 +282,230 @@ if [[ $rc_off -eq 0 \
   ok "fresh bootstrap writes every layer false and the docs block ends at state:review"
 else
   bad "fresh layers were not all false: $(jq -c '.layers // empty' "$FRESH/.relentless/config.json" 2>/dev/null || true) rc=$rc_off"
+fi
+
+# Legacy Codex pin. The two pin comments and the two relentless tables go.
+# Every other line stays byte for byte. A file that is only the pin is removed.
+# Dry-run prints the retire line and does not write. No pin leaves the file.
+write_pin_consumer() { # dest
+  mkdir -p "$1/.relentless" "$1/.codex"
+  cat >"$1/.relentless/config.json" <<'JSON'
+{
+  "decider": { "name": "Ada", "github": "ada" },
+  "merge": { "default": "human" },
+  "workers": { "default": { "github": "ada" } },
+  "checks": { "test": "npm test" },
+  "layers": {
+    "merge": false, "review": false, "qa": false, "worktrees": false,
+    "decisions": false, "templates": false, "ci": false, "githooks": false, "docs": false
+  }
+}
+JSON
+}
+
+run_pin_boot() { # workdir [bootstrap args...]
+  local dir="$1"
+  shift
+  PATH="$TMP/bin:$PATH" bash "$BOOT" --repo o/r --workdir "$dir" \
+    --harness codex --merge-default human --decider Ada --decider-github ada \
+    --no-init-empty "$@" 2>&1
+}
+
+# Unrelated lines, including trailing spaces and a table between the two pin tables.
+pin_mixed_input() {
+  printf '%s\n' \
+    '# kept top comment' \
+    'model = "kept"' \
+    'top_key = "value"  ' \
+    'hint = "re-run bootstrap --upgrade or edit ref= below."' \
+    '' \
+    '# Relentless Codex pin (no native per-project plugin lockfile on 0.165.x).' \
+    '# After bumping the plugin, re-run bootstrap --upgrade or edit ref= below.' \
+    '# kept beside the pin' \
+    '[marketplaces.relentless]' \
+    'source_type = "git"' \
+    'source = "https://github.com/example/relentless"' \
+    'ref = "v1.4.11"' \
+    '' \
+    '[kept.middle]' \
+    'middle = "stay"' \
+    '# middle comment stays' \
+    '' \
+    '[plugins."relentless@relentless"]' \
+    'enabled = true' \
+    '' \
+    '[kept.tail]' \
+    'tail = "stay"' \
+    '# tail comment'
+}
+
+pin_mixed_expected() {
+  printf '%s\n' \
+    '# kept top comment' \
+    'model = "kept"' \
+    'top_key = "value"  ' \
+    'hint = "re-run bootstrap --upgrade or edit ref= below."' \
+    '' \
+    '# kept beside the pin' \
+    '[kept.middle]' \
+    'middle = "stay"' \
+    '# middle comment stays' \
+    '' \
+    '[kept.tail]' \
+    'tail = "stay"' \
+    '# tail comment'
+}
+
+pin_only_input() {
+  printf '%s\n' \
+    '# Relentless Codex pin (no native per-project plugin lockfile on 0.165.x).' \
+    '# After bumping the plugin, re-run bootstrap --upgrade or edit ref= below.' \
+    '[marketplaces.relentless]' \
+    'source_type = "git"' \
+    'source = "https://github.com/example/relentless"' \
+    'ref = "v1.4.11"' \
+    '' \
+    '[plugins."relentless@relentless"]' \
+    'enabled = true'
+}
+
+# The upgrade-append writer used one comment and a leading blank line.
+pin_append_only_input() {
+  printf '%s\n' \
+    '' \
+    '# Relentless Codex pin (added by bootstrap --upgrade)' \
+    '[marketplaces.relentless]' \
+    'source_type = "git"' \
+    'source = "https://github.com/example/relentless"' \
+    'ref = "v1.4.11"' \
+    '' \
+    '[plugins."relentless@relentless"]' \
+    'enabled = true'
+}
+
+pin_plain_input() {
+  printf '%s\n' \
+    '# ordinary comment' \
+    'model = "kept"' \
+    '' \
+    '[other]' \
+    'key = "value"' \
+    '# still here'
+}
+
+MIX="$TMP/pin-mix"
+write_pin_consumer "$MIX"
+pin_mixed_input >"$MIX/.codex/config.toml"
+pin_mixed_expected >"$TMP/pin-expected"
+set +e
+out_pin="$(run_pin_boot "$MIX" --upgrade --apply)"
+rc_pin=$?
+set -e
+if [[ $rc_pin -eq 0 ]] && printf '%s\n' "$out_pin" | grep -Fqx 'retire: .codex/config.toml legacy marketplace pin'; then
+  ok "apply upgrade prints the retire line"
+else
+  bad "apply upgrade retire line missing (rc=$rc_pin)"
+fi
+if cmp -s "$MIX/.codex/config.toml" "$TMP/pin-expected" \
+  && ! grep -q '# Relentless Codex pin' "$MIX/.codex/config.toml" \
+  && ! grep -q '\[marketplaces\.relentless\]' "$MIX/.codex/config.toml" \
+  && ! grep -q '\[plugins\."relentless@relentless"\]' "$MIX/.codex/config.toml"; then
+  ok "legacy pin removed and other lines byte-preserved"
+else
+  bad "legacy pin mix was not byte-preserved"
+  diff -u "$TMP/pin-expected" "$MIX/.codex/config.toml" >&2 || true  # intentional: diff exits 1 when the files differ
+fi
+set +e
+out_pin2="$(run_pin_boot "$MIX" --upgrade --apply)"
+rc_pin2=$?
+set -e
+if [[ $rc_pin2 -eq 0 ]] && cmp -s "$MIX/.codex/config.toml" "$TMP/pin-expected" \
+  && ! printf '%s\n' "$out_pin2" | grep -q 'legacy marketplace pin'; then
+  ok "retiring the pin is idempotent"
+else
+  bad "second upgrade changed the retired config (rc=$rc_pin2)"
+fi
+
+ONLY="$TMP/pin-only"
+write_pin_consumer "$ONLY"
+pin_only_input >"$ONLY/.codex/config.toml"
+set +e
+out_only="$(run_pin_boot "$ONLY" --upgrade --apply)"
+rc_only=$?
+set -e
+if [[ $rc_only -eq 0 && ! -e "$ONLY/.codex/config.toml" ]] \
+  && printf '%s\n' "$out_only" | grep -Fqx 'retire: .codex/config.toml legacy marketplace pin'; then
+  ok "config that is only the legacy pin is removed"
+else
+  bad "pin-only config.toml was not removed (rc=$rc_only)"
+fi
+set +e
+out_only2="$(run_pin_boot "$ONLY" --upgrade --apply)"
+rc_only2=$?
+set -e
+if [[ $rc_only2 -eq 0 && ! -e "$ONLY/.codex/config.toml" ]]; then
+  ok "removing a pin-only config is idempotent"
+else
+  bad "second upgrade on a removed pin recreated config.toml (rc=$rc_only2)"
+fi
+
+APPEND="$TMP/pin-append"
+write_pin_consumer "$APPEND"
+pin_append_only_input >"$APPEND/.codex/config.toml"
+set +e
+out_append="$(run_pin_boot "$APPEND" --upgrade --apply)"
+rc_append=$?
+set -e
+if [[ $rc_append -eq 0 && ! -e "$APPEND/.codex/config.toml" ]]; then
+  ok "upgrade-append pin with only whitespace left is removed"
+else
+  bad "upgrade-append pin file was not removed (rc=$rc_append)"
+fi
+
+DRY="$TMP/pin-dry"
+write_pin_consumer "$DRY"
+pin_mixed_input >"$DRY/.codex/config.toml"
+cp "$DRY/.codex/config.toml" "$TMP/pin-dry-before"
+set +e
+out_dry="$(run_pin_boot "$DRY" --upgrade)"
+rc_dry=$?
+set -e
+if [[ $rc_dry -eq 0 ]] && cmp -s "$DRY/.codex/config.toml" "$TMP/pin-dry-before" \
+  && printf '%s\n' "$out_dry" | grep -Fqx 'retire (dry-run): .codex/config.toml legacy marketplace pin' \
+  && grep -q '# Relentless Codex pin' "$DRY/.codex/config.toml"; then
+  ok "dry-run prints the retire line and leaves the pin file untouched"
+else
+  bad "dry-run changed the pin file or skipped the retire line (rc=$rc_dry)"
+fi
+
+PLAIN="$TMP/pin-plain"
+write_pin_consumer "$PLAIN"
+pin_plain_input >"$PLAIN/.codex/config.toml"
+cp "$PLAIN/.codex/config.toml" "$TMP/pin-plain-before"
+set +e
+out_plain="$(run_pin_boot "$PLAIN" --upgrade --apply)"
+rc_plain=$?
+set -e
+if [[ $rc_plain -eq 0 ]] && cmp -s "$PLAIN/.codex/config.toml" "$TMP/pin-plain-before" \
+  && ! printf '%s\n' "$out_plain" | grep -q 'legacy marketplace pin'; then
+  ok "config with no legacy pin is left untouched"
+else
+  bad "config without a pin was changed (rc=$rc_plain)"
+fi
+
+HOLD="$TMP/pin-hold"
+write_pin_consumer "$HOLD"
+pin_mixed_input >"$HOLD/.codex/config.toml"
+cp "$HOLD/.codex/config.toml" "$TMP/pin-hold-before"
+set +e
+out_hold="$(run_pin_boot "$HOLD" --apply)"
+rc_hold=$?
+set -e
+if [[ $rc_hold -eq 0 ]] && cmp -s "$HOLD/.codex/config.toml" "$TMP/pin-hold-before" \
+  && ! printf '%s\n' "$out_hold" | grep -q 'legacy marketplace pin'; then
+  ok "without --upgrade the legacy pin stays"
+else
+  bad "bootstrap without --upgrade edited the legacy pin (rc=$rc_hold)"
 fi
 
 echo "pass=$PASS fail=$FAIL"
