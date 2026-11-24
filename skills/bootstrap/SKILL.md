@@ -34,5 +34,5 @@ core/scripts/bootstrap.sh --repo OWNER/NAME --workdir PATH \
   --harness both --upgrade --apply
 ```
 
-Does not rewrite an existing label, template, or workflow. Refreshes a Codex brief or layer file only when it still carries the `relentless:owned` marker. Still adds a missing config, the docs block, and missing core labels.
+Does not rewrite an existing label, template, or workflow. Refreshes a Codex brief or layer file only when it still carries the `relentless:owned` marker. Still adds a missing config, the docs block, and missing core labels. When the harness is codex or both, `--upgrade` removes a legacy `# Relentless Codex pin` from `.codex/config.toml`: the two pin comments and the `[marketplaces.relentless]` and `[plugins."relentless@relentless"]` tables. Other keys stay. The file is deleted when only whitespace remains.
 
